@@ -11,10 +11,15 @@
 <style scoped>
 
   .embed-container {
-    width: 800px;
-    height: 600px;
+    width: 90rem;
+    border-radius: 15px;
+    height: 50rem;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
     border: 1px solid gray;
-    overflow: auto;
+    overflow: hidden;
     display: flex;
     justify-content: center;
     align-items: center;

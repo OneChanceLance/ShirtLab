@@ -12,9 +12,11 @@
     "fabric": "^6.7.0",
     "firebase": "^11.9.1",
     "three": "^0.177.0",
-    "vue": "^3.5.17"
+    "vue": "^3.5.17",
+    "vue-material-design-icons": "^5.3.1"
   },
   "devDependencies": {
+    "@types/three": "^0.177.0",
     "@vitejs/plugin-vue": "^6.0.0",
     "@vue/tsconfig": "^0.7.0",
     "typescript": "~5.8.3",
