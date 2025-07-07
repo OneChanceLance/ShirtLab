@@ -11,6 +11,10 @@
     Y: {{ cameraPosition.y.toFixed(2) }}, 
     Z: {{ cameraPosition.z.toFixed(2) }}
   </div>
+  <div class="hover-indicator">
+    Hovering: {{ hoveredState }}
+  </div>
+  
 </template>
 
 <script setup lang="ts">
@@ -30,7 +34,8 @@ function onFileChange(e: Event) {
 }
 
 defineExpose({ onFileChange });
-
+// Track whether the decal is currently selected
+const decalSelected = ref(false);
 const canvasContainer = ref<HTMLDivElement | null>(null)
 const cameraPosition = reactive({ x: 0, y: 0, z: 0 })
 
@@ -52,7 +57,7 @@ decalCanvas.width = canvasSize
 decalCanvas.height = canvasSize
 const decalCtx = decalCanvas.getContext('2d')!
 const baseImage = new Image()
-baseImage.src = '/models/textures/UVMAP_diffuse_1001.png'
+baseImage.src = '/models/tshirtFemale/textures/UVMAP_diffuse_1001.png'
 baseImage.onload = () => {
   decalCtx.drawImage(baseImage, 0, 0, canvasSize, canvasSize)
   dynamicTexture.needsUpdate = true
@@ -64,9 +69,24 @@ dynamicTexture.flipY = true
 dynamicTexture.encoding = THREE.SRGBColorSpace
 
 let isDraggingDecal = false
+// Resizing state
+let decalScale = new THREE.Vector2(1, 1);
+let isResizing = false;
+let resizeSign = { x: 1, y: 1 };
+let initialScale = new THREE.Vector2(1, 1);
+let initialHalfWidthUV = 0.05;
+// Prevent texture wrapping and lock aspect ratio
+dynamicTexture.wrapS = THREE.ClampToEdgeWrapping;
+dynamicTexture.wrapT = THREE.ClampToEdgeWrapping;
+let initialAspectRatio = 1;
+const cornerThresholdUV = 0.02;
+
 let placed = false;
 let isHovering = false;
-const hoverThreshold = 0.1; // adjust radius in UV space
+
+// Hover indicator state
+const hoveredState = ref<'outside' | 'shirt' | 'decal'>('outside');
+
 
 // Raycasting and mouse setup for placing images on the shirt
 const raycaster = new THREE.Raycaster()
@@ -74,19 +94,45 @@ const mouse = new THREE.Vector2()
 let shirtModel: THREE.Object3D | null = null
 let currentUV = new THREE.Vector2();
 
-function updateDecal(hover: boolean) {
+function updateDecal(_: boolean) {
+    const shouldHighlight = isHovering || isResizing || decalSelected.value;
   decalCtx.clearRect(0, 0, canvasSize, canvasSize);
   decalCtx.drawImage(baseImage, 0, 0, canvasSize, canvasSize);
-  decalCtx.filter = hover ? 'brightness(200%)' : 'none';
-  const logoSize = canvasSize * 0.1;
-  decalCtx.drawImage(
-    logoImg,
-    currentUV.x * canvasSize - logoSize / 2,
-    (1 - currentUV.y) * canvasSize - logoSize / 2,
-    logoSize,
-    logoSize
-  );
+
+  const baseLogoSize = canvasSize * 0.1;
+  const width = baseLogoSize * decalScale.x;
+  const height = baseLogoSize * decalScale.y;
+  const x = currentUV.x * canvasSize - width / 2;
+  const y = (1 - currentUV.y) * canvasSize - height / 2;
+
+if (shouldHighlight) {
+    // draw semi-transparent white background
+    decalCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    decalCtx.fillRect(x, y, width, height);
+  }
+
+decalCtx.filter = (isHovering || isResizing) ? 'brightness(200%)' : 'none';
+  decalCtx.drawImage(logoImg, x, y, width, height);
   decalCtx.filter = 'none';
+
+  // draw resize handles
+  const handleSize = 10;
+  const halfHandle = handleSize / 2;
+  decalCtx.fillStyle = 'white';
+  decalCtx.strokeStyle = 'black';
+  const corners = [
+    { sx: 0, sy: 0 },
+    { sx: 1, sy: 0 },
+    { sx: 0, sy: 1 },
+    { sx: 1, sy: 1 },
+  ];
+  corners.forEach(({ sx, sy }) => {
+    const hx = x + sx * width - halfHandle;
+    const hy = y + sy * height - halfHandle;
+    decalCtx.fillRect(hx, hy, handleSize, handleSize);
+    decalCtx.strokeRect(hx, hy, handleSize, handleSize);
+  });
+
   dynamicTexture.needsUpdate = true;
 }
 
@@ -109,21 +155,21 @@ onMounted(() => {
   canvasContainer.value.appendChild(renderer.domElement)
 
   // Load all texture maps from the models/textures folder
-  const textureLoader = new THREE.TextureLoader().setPath('/models/textures/')
+  const textureLoader = new THREE.TextureLoader().setPath('/models/tshirtFemale/textures/')
 
   // Load logo decal from /models/logo.png
   // Not needed: decalMaterial, decalMesh
 
   
   const mtlLoader = new MTLLoader()
-  mtlLoader.setPath('/models/');
-  mtlLoader.setResourcePath('/models/textures/');
+  mtlLoader.setPath('/models/tshirtFemale/');
+  mtlLoader.setResourcePath('/models/tshirtFemale/textures/');
   mtlLoader.load('OBJ_1.mtl', (materials) => {
     materials.preload()
 
     const objLoader = new OBJLoader()
     objLoader.setMaterials(materials)
-    objLoader.setPath('/models/')
+    objLoader.setPath('/models/tshirtFemale/')
     objLoader.load('OBJ_1.obj', (object) => {
       object.scale.set(2, 2, 2)
       // Center the object's origin to its geometry center
@@ -168,19 +214,111 @@ onMounted(() => {
   const ambient = new THREE.AmbientLight(0x404040)
   scene.add(ambient)
 
+  // Back light for illuminating the back of the shirt
+  const backLight = new THREE.DirectionalLight(0xffffff, 0.5)
+  backLight.position.set(-5, 5, -5)
+  scene.add(backLight)
+
 const controls = new OrbitControls(camera, renderer.domElement)
 // Disable damping/inertia so rotation stops instantly when you let go:
 controls.enableDamping = false
 controls.dampingFactor = 0.05
 controls.enableRotate = true
 
+// Start dragging decal when pointer down over decal or start resizing if near corner
+canvasEl.addEventListener('pointerdown', (event: PointerEvent) => {
+  if (placed && isHovering) {
+    const bounds = canvasContainer.value!.getBoundingClientRect();
+    mouse.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+    mouse.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(shirtModel!, true);
+    if (hits.length && hits[0].uv) {
+      const uvHit = hits[0].uv.clone();
+      // Only start resizing if near a corner
+      const halfW = initialHalfWidthUV * decalScale.x;
+      const halfH = initialHalfWidthUV * decalScale.y; // Not used, but keep for symmetry
+      const dx = uvHit.x - currentUV.x;
+      const dy = uvHit.y - currentUV.y;
+      const signX = dx > 0 ? 1 : -1;
+      const signY = dy > 0 ? 1 : -1;
+      if (Math.abs(Math.abs(dx) - halfW) < cornerThresholdUV &&
+          Math.abs(Math.abs(dy) - halfH) < cornerThresholdUV) {
+        // begin resizing
+        isResizing = true;
+        controls.enableRotate = false;
+        initialScale.copy(decalScale);
+        initialAspectRatio = initialScale.y / initialScale.x;
+        resizeSign = { x: signX, y: signY };
+        initialHalfWidthUV = halfW;
+        return;
+      }
+    }
+    // fallback to moving decal
+    if (placed && isHovering) {
+      isDraggingDecal = true;
+      controls.enableRotate = false;
+    }
+  }
+});
+
+// Resize decal when dragging corner
+canvasEl.addEventListener('pointermove', (event: PointerEvent) => {
+  if (isResizing && shirtModel) {
+    const bounds = canvasContainer.value!.getBoundingClientRect();
+    mouse.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+    mouse.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(shirtModel, true);
+    if (hits.length && hits[0].uv) {
+      const uv = hits[0].uv.clone();
+      // uniform scale based on horizontal drag distance
+      const delta = (uv.x - currentUV.x) * resizeSign.x;
+      const factor = delta / initialHalfWidthUV;
+      const newScaleX = Math.max(0.1, initialScale.x * factor);
+      const newScaleY = newScaleX * initialAspectRatio;
+      decalScale.set(newScaleX, newScaleY);
+      updateDecal(true);
+    }
+  }
+});
+
+// Drag decal: update position as pointer moves
+canvasEl.addEventListener('pointermove', (event: PointerEvent) => {
+  if (isDraggingDecal && shirtModel) {
+    const bounds = canvasContainer.value!.getBoundingClientRect();
+    mouse.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+    mouse.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(shirtModel, true);
+    if (hits.length && hits[0].uv) {
+      const uv = hits[0].uv.clone();
+      uv.x = Math.max(chestBounds.xMin, Math.min(chestBounds.xMax, uv.x));
+      uv.y = Math.max(chestBounds.yMin, Math.min(chestBounds.yMax, uv.y));
+      currentUV.copy(uv);
+      updateDecal(true);
+    }
+  }
+});
+
+// Stop dragging decal or resizing when pointer is released over the canvas
+canvasEl.addEventListener('pointerup', () => {
+  if (isResizing) {
+    isResizing = false;
+    controls.enableRotate = true;
+  }
+  if (isDraggingDecal) {
+    isDraggingDecal = false;
+    controls.enableRotate = true;
+  }
+});
 
   const animate = () => {
     requestAnimationFrame(animate)
     controls.update()
 
 
-    renderer.render(scene, camera)
+    renderer.render(scene, camera) 
     renderer.outputColorSpace = THREE.SRGBColorSpace
 
     cameraPosition.x = camera.position.x
@@ -233,43 +371,43 @@ controls.enableRotate = true
 
   // On click, allow repositioning by clicking placed decal, or place if not placed
   canvasEl.addEventListener('click', (event: MouseEvent) => {
-  if (!shirtModel) return;
-  // Do a raycast to see if the click was on the shirt
-  const bounds = canvasContainer.value!.getBoundingClientRect();
-  mouse.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
-  mouse.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-  const hits = raycaster.intersectObject(shirtModel, true);
-  if (!hits.length || !hits[0].uv) {
-    // Click was NOT on shirt—don't place decal!
-    return;
-  }
-
-  // Click WAS on the shirt
-  if (placed) {
-    // Only unlock if hovering over the decal
-    if (isHovering) {
-      placed = false;
-      updateDecal(false);
+    if (!shirtModel) return;
+    // Do a raycast to see if the click was on the shirt
+    const bounds = canvasContainer.value!.getBoundingClientRect();
+    mouse.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+    mouse.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(shirtModel, true);
+    if (!hits.length || !hits[0].uv) {
+      // Click was NOT on shirt—don't place decal!
+      decalSelected.value = false;
+      return;
     }
-    return;
-  }
 
-  placed = true;
-  // Update decal placement at currentUV
-  const uv = currentUV;
-  uv.x = clampUV(uv.x, chestBounds.xMin, chestBounds.xMax);
-  uv.y = clampUV(uv.y, chestBounds.yMin, chestBounds.yMax);
-  decalCtx.drawImage(baseImage, 0, 0, canvasSize, canvasSize);
-  const logoSize = canvasSize * 0.1;
-  decalCtx.drawImage(
-    logoImg,
-    uv.x * canvasSize - logoSize / 2,
-    (1 - uv.y) * canvasSize - logoSize / 2,
-    logoSize, logoSize
-  );
-  dynamicTexture.needsUpdate = true;
-});
+    if (!placed) {
+      // first time placing
+      placed = true;
+      decalSelected.value = true;
+      // … (your existing draw-at-currentUV code)
+    } else {
+      // toggle selection when clicking again; use dynamic hover threshold
+      decalSelected.value = isHovering;
+      updateDecal(false);  // refresh highlight
+    }
+    // Update decal placement at currentUV
+    const uv = currentUV;
+    uv.x = clampUV(uv.x, chestBounds.xMin, chestBounds.xMax);
+    uv.y = clampUV(uv.y, chestBounds.yMin, chestBounds.yMax);
+    decalCtx.drawImage(baseImage, 0, 0, canvasSize, canvasSize);
+    const logoSize = canvasSize * 0.1;
+    decalCtx.drawImage(
+      logoImg,
+      uv.x * canvasSize - logoSize / 2,
+      (1 - uv.y) * canvasSize - logoSize / 2,
+      logoSize, logoSize
+    );
+    dynamicTexture.needsUpdate = true;
+  });
 
   // Hover highlight for placed decal using raycasting
   canvasEl.addEventListener('pointermove', (event: PointerEvent) => {
@@ -279,22 +417,40 @@ controls.enableRotate = true
     mouse.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
     const hits = raycaster.intersectObject(shirtModel, true);
-    if (!hits.length || !hits[0].uv) {
-      if (isHovering) {
-        isHovering = false;
-        updateDecal(false);
+    let hoveringNow = false;
+    if (hits.length && hits[0].uv) {
+      const uvHit = hits[0].uv.clone();
+      // Only consider UVs within the chest bounds
+      if (
+        uvHit.x >= chestBounds.xMin && uvHit.x <= chestBounds.xMax &&
+        uvHit.y >= chestBounds.yMin && uvHit.y <= chestBounds.yMax
+      ) {
+        const dist = uvHit.distanceTo(currentUV);
+        // Dynamic hover threshold = half the decal's UV width
+        const dynamicThreshold = 0.05 * decalScale.x;
+        hoveringNow = dist < dynamicThreshold;
       }
-      return;
     }
-    const uvHit = hits[0].uv.clone();
-    uvHit.x = clampUV(uvHit.x, chestBounds.xMin, chestBounds.xMax);
-    uvHit.y = clampUV(uvHit.y, chestBounds.yMin, chestBounds.yMax);
-    const dist = uvHit.distanceTo(currentUV);
-    const hoveringNow = dist < hoverThreshold;
     if (hoveringNow !== isHovering) {
       isHovering = hoveringNow;
-      if (isHovering) console.log('Hovering over decal');
       updateDecal(isHovering);
+    }
+  });
+
+  // Update hover indicator for shirt, decal, or outside
+  canvasEl.addEventListener('pointermove', (event: PointerEvent) => {
+    if (!shirtModel) return;
+    const bounds = canvasContainer.value!.getBoundingClientRect();
+    mouse.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+    mouse.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(shirtModel, true);
+    if (!hits.length || !hits[0].uv) {
+      hoveredState.value = 'outside';
+    } else if (placed && isHovering) {
+      hoveredState.value = 'decal';
+    } else {
+      hoveredState.value = 'shirt';
     }
   });
 
@@ -321,6 +477,16 @@ controls.enableRotate = true
   position: absolute;
   bottom: 10px;
   left: 10px;
+  color: white;
+  background: rgba(0,0,0,0.6);
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.hover-indicator {
+  position: absolute;
+  top: 10px;
+  right: 10px;
   color: white;
   background: rgba(0,0,0,0.6);
   padding: 4px 8px;

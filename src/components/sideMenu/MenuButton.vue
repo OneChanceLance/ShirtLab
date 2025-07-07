@@ -62,15 +62,10 @@ const iconComponent = computed(() => {
   transform: translateY(-2px);
 }
 
-.menu-button:active {
-  background-color: rgba(255, 255, 255, 0.03);
-  transform: translateY(1px);
-  box-shadow: inset 0 2px 6px rgba(0,0,0,0.2);
-}
 
 .menu-button.active {
-  background-color: rgba(58, 161, 255, 0.12);
-  border-left: 3px solid #3aa1ff;
+  background-color: rgba(58, 255, 120, 0.12);
+  border-left: 3px solid #3aff68;
 }
 
 .icon {

@@ -12,8 +12,8 @@
 
 .background-frame {
   height: 100%;
-  width: 100%;
-  background-color: #fdfdfd;
+  width: 100vw;
+  background-color: #232323;
 
 
 
