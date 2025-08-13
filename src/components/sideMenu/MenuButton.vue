@@ -1,91 +1,73 @@
 <template>
-    <div class="menu-button" :class="{ active }" @click="$emit('click', variant)">
-        <component :is="iconComponent" class="icon" />
-        <span>{{ label }}</span>
-    </div>
+  <div class="menu-button" :class="{ active }" @click="$emit('click', variant)">
+    <img :src="iconSrc" class="icon" />
+    <span>{{ label }}</span>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
-import DrawIcon from 'vue-material-design-icons/Draw.vue';
-import TShirtCrewIcon from 'vue-material-design-icons/TshirtCrew.vue';
-import FormatTextIcon from 'vue-material-design-icons/FormatText.vue';
-import  PaletteIcon from 'vue-material-design-icons/Palette.vue';
-import FormatListTextIcon from 'vue-material-design-icons/FormatListText.vue';
+  import { computed } from 'vue';
 
-const props = defineProps<{
-  variant: string
-  label: string
-  active?: boolean
-}>()
+  const getIcon = (name: string, isActive?: boolean) => {
+    const variant = isActive ? 'Dark' : 'White';
+    return new URL(`./assets/${name.toLowerCase()}${variant}.png`, import.meta.url).href;
+  };
 
-defineEmits(['click'])
+  const props = defineProps<{
+    variant: string
+    label: string
+    active?: boolean
+  }>()
 
-const iconComponent = computed(() => {
-  switch (props.variant) {
-    case 'Shirt':
-      return TShirtCrewIcon
-    case 'Text':
-      return FormatTextIcon
-    case 'Design':
-      return PaletteIcon
-    case 'Names':
-      return FormatListTextIcon
-    default:
-      return DrawIcon
-  }
-})
+  defineEmits(['click'])
+
+  const iconSrc = computed(() => getIcon(props.variant, props.active));
 </script>
 
-<style scoped>
-.menu-button {
-  width: 90%;
-  padding: 0.75rem 0.5rem;
-  color: white;
-  text-align: center;
-  cursor: pointer;
-  border-left: 3px solid transparent;
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.menu-button:hover {
-  background-color: rgba(255, 255, 255, 0.08);
-  transform: translateY(-2px);
-}
+<style scoped lang="scss">
+  .menu-button {
+    width: 100%;
+    color: white;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    background: rgb(75, 85, 93);
+  }
 
 
-.menu-button.active {
-  background-color: rgba(58, 255, 120, 0.12);
-  border-left: 3px solid #3aff68;
-}
+  .menu-button.active {
+    background-color: rgb(255, 255, 255);
+    color: rgb(75, 85, 93);
+    span {
+      font-weight: 600;
+    }
+  }
 
-.icon {
-  font-size: 2.5rem;
-  width: 2.5rem;
-  height: 2.5rem;
-  display: block;
-}
+  .icon {
+    margin-bottom: 0.25rem;
+    height: 2rem;
+    object-fit: contain;
+    display: block;
+  }
 
-:deep(.icon > svg) {
-  width: 100%;
-  height: 100%;
-}
+  :deep(.icon > svg) {
+    width: 100%;
+    height: 100%;
+  }
 
-span {
-  font-size: 0.85rem;
-  font-weight: 500;
-  letter-spacing: 0.03em;
-  text-transform: none;
-  font-family: 'Inter', sans-serif;
-  color: #e0e0e0;
-}
+  span {
+    font-size: 120%;
+    font-weight: 300;
+    width: 85%;
+    text-transform: none;
+    font-family: 'Anek Latin', sans-serif;
+    line-height: normal;
+    margin-bottom: -0.25rem;
+  }
+
+
 </style>
