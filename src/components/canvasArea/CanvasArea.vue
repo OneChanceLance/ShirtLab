@@ -13,9 +13,7 @@
 .background-frame {
   height: 100%;
   width: 100vw;
-  background-color: #232323;
-
-
+  background-color: rgb(208, 211, 211);
 
 }
 </style>
