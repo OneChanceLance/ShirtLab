@@ -1,7 +1,8 @@
+import { ref } from 'vue';
 import type { ColorOption } from '../../shirtlab/types';
 
 export const COLOR_OPTIONS: Record<string, ColorOption> = {
-    'None': { name: 'none', color: '#00000001' },
+    'None': { name: 'None', color: '#00000001' },
     'White': { name: 'White', color: '#ffffffff' },
     'Black': { name: 'Black', color: '#000000ff' },
 
@@ -46,3 +47,21 @@ export const COLOR_OPTIONS: Record<string, ColorOption> = {
     'Peach': { name: 'Peach', color: '#f0c187' },
     'Beige': { name: 'Beige', color: '#c9b894' }
 };
+
+export const PRODUCT_COLORS = ref<any[]>([]);
+export const selectedProductColorIndex = ref(0);
+
+export function setProductColors(colors: any[]) {
+  PRODUCT_COLORS.value = Array.isArray(colors) ? colors : [];
+  if (!PRODUCT_COLORS.value.length) {
+    selectedProductColorIndex.value = 0;
+  } else if (selectedProductColorIndex.value >= PRODUCT_COLORS.value.length) {
+    selectedProductColorIndex.value = 0;
+  }
+}
+
+export function setSelectedProductColorIndex(index: number) {
+  if (typeof index === 'number' && index >= 0 && index < Number.MAX_SAFE_INTEGER) {
+    selectedProductColorIndex.value = index;
+  }
+}

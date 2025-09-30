@@ -2,28 +2,143 @@
 <html lang="en">
 
 <head>
-
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/png" href="/logo.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link
-    href="https://fonts.googleapis.com/css2?family=Anek+Latin:wght@100..800&family=Stardos+Stencil:wght@400;700&display=swap"
-    rel="stylesheet">
-  <link href="https://db.onlinewebfonts.com/c/3abd2fe795c6d15e5cd1ffce0afc50a8?family=Casey+Classic" rel="stylesheet">
-  <link
-    href="https://fonts.googleapis.com/css?family=Roboto:100,200,300,regular,500,600,700,800,900,100italic,200italic,300italic,italic,500italic,600italic,700italic,800italic,900italic"
-    rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css?family=Dancing+Script:regular,500,600,700" rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css?family=Shadows+Into+Light:regular" rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css?family=Gloria+Hallelujah:regular" rel="stylesheet" />
-  <link rel="stylesheet" href="https://use.typekit.net/oal0nsb.css">
+  <title>ShirtLab by SOD — Dev</title>
+  <!-- optional fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Anek+Latin:wght@100..800&display=swap" rel="stylesheet" />
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0
+    }
 
-  <title>Vite + Vue + TS</title>
+    #app {
+      height: 100%
+    }
+
+    .bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 12px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: #111;
+      color: #fff;
+      z-index: 1000;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto
+    }
+
+    .bar button {
+      padding: 8px 12px;
+      border: 0;
+      border-radius: 8px;
+      background: #2b87ff;
+      color: #fff;
+      cursor: pointer
+    }
+
+    .wrap {
+      position: fixed;
+      top: 56px;
+      left: 0;
+      right: 0;
+      bottom: 0
+    }
+
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 0
+    }
+  </style>
 </head>
 
 <body>
   <div id="app"></div>
-  <script type="module" src="/src/main.ts"></script>
+
+  <script>
+    (function () {
+      const params = new URLSearchParams(location.search);
+      const harness = params.get('harness') === '1';
+
+      if (!harness) {
+        // Normal app: load Vite entry
+        const s = document.createElement('script');
+        s.type = 'module';
+        s.src = '/src/main.ts';
+        document.body.appendChild(s);
+        return;
+      }
+
+      // HARNESS MODE: parent page with buttons + iframe of the widget at '/'
+      document.body.innerHTML = `
+          <div class="bar">
+            <strong>ShirtLab Harness</strong>
+            <button id="sendClothing">Send Clothing</button>
+            <button id="sendImages">Send Images</button>
+            <button id="sendGrid">Send Grid</button>
+            <input id="prodCode" placeholder="code" style="margin-left:8px;width:140px" />
+            <button id="loadProduct">Load by Code</button>
+            <span id="status" style="margin-left:auto;opacity:.8"></span>
+          </div>
+          <div class="wrap">
+            <iframe id="shirtlab-frame" src="/"></iframe>
+          </div>
+        `;
+
+      const frame = document.getElementById('shirtlab-frame');
+      const ORIGIN = location.origin; // same-origin dev test
+      const statusEl = document.getElementById('status');
+      const log = (t) => statusEl && (statusEl.textContent = t);
+      const codeInput = document.getElementById('prodCode');
+
+      window.addEventListener('message', (ev) => {
+        if (ev.data?.type === 'shirtlab:ready') log('Widget ready');
+        if (ev.data?.type === 'shirtlab:ack') log('ACK ' + JSON.stringify(ev.data));
+      });
+
+      function send(type, payload) {
+        const id = Math.random().toString(36).slice(2);
+        frame && frame.contentWindow?.postMessage({ type, payload, id }, ORIGIN);
+        return id;
+      }
+
+      document.getElementById('sendClothing')?.addEventListener('click', () => {
+        const xInput = document.getElementById('bgX');
+        const scale = 1;
+        // Sends BOTH images plus grid plus bg transform driven here
+        send('shirtlab:set-clothing', {
+          front: 'https://m.media-amazon.com/images/I/619up4FisSL._UY1000_.jpg',
+          back: 'https://m.media-amazon.com/images/I/51HvW8GhDGL._AC_SX679_.jpg',
+          grid: { x: 175, y: 150, w: 250, h: 400 },
+          bgTransform: { offsetX: 0, offsetY: -50, scale }
+        });
+        log(`Sent clothing with bgTransform: x=${offsetX}, y=${offsetY}, scale=${scale}`);
+      });
+
+      document.getElementById('sendImages')?.addEventListener('click', () => {
+        send('shirtlab:set-images', {
+          front: 'https://via.placeholder.com/750x950/99c/000?text=Front+Alt',
+          back: 'https://via.placeholder.com/750x950/c99/000?text=Back+Alt'
+        });
+      });
+
+      document.getElementById('sendGrid')?.addEventListener('click', () => {
+        send('shirtlab:set-grid', { x: 160, y: 10, w: 280, h: 420 });
+      });
+
+      document.getElementById('loadProduct')?.addEventListener('click', () => {
+        const code = (codeInput && codeInput.value || '').trim();
+        if (!code) { log('Enter a code'); return; }
+        send('shirtlab:load-product', { code });
+      });
+    })();
+  </script>
 </body>
 
 </html>
