@@ -1,25 +1,56 @@
 <template>
-  <h3>BORDER</h3>
-  <div v-if="!componentsShowing" class="embed-container">
-    <ShirtLab />
+  <div class="app-shell">
+    <div class="app-shell__workspace">
+      <div class="embed-container">
+        <ShirtLab ref="shirtLabRef" />
+      </div>
+    </div>
+    <SsActivewearMenu class="ssa-floating-menu" @variant-selected="handleVariantSelected" />
   </div>
-  <div v-else class="embed-container">
-    <h3>Components are showing</h3>
-  </div>height: 598 px width: 1536 px
 </template>
 
 <script setup lang="ts">
   import { ref } from 'vue';
-  import ShirtLab from './components/shirtlab/ShirtLab.vue'
+  import ShirtLab from './components/shirtlab/ShirtLab.vue';
+  import SsActivewearMenu from './components/SsActivewearMenu.vue';
 
-  const componentsShowing = ref(false);
+  const shirtLabRef = ref<{ applyExternalClothing: (payload: any) => void } | null>(null);
+
+  function handleVariantSelected(payload: any) {
+    if (!shirtLabRef.value) return;
+    const imagery = payload?.imagery ?? {};
+
+    shirtLabRef.value.applyExternalClothing({
+      front: imagery.front,
+      back: imagery.back,
+      grid: imagery.grid,
+      colors: imagery.colors,
+      bgTransform: imagery.bgTransform,
+    });
+  }
 </script>
 
 <style scoped>
 
+
+  .app-shell {
+    position: relative;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  }
+
+  .app-shell__workspace {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 2rem 3rem;
+    box-sizing: border-box;
+  }
+
   .embed-container {
     width: 1440px;
-    /* keep it wide for workspace */
+    max-width: 95vw;
     background-color: aliceblue;
     height: 560px;
     border-radius: 1rem;
@@ -27,34 +58,13 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    transform-origin: center;
+    box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35);
   }
 
-  #buttons {
+  .ssa-floating-menu {
     position: fixed;
-    top: 10px;
-    left: 10px;
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    top: 1.5rem;
+    left: calc(13.5rem + 2rem);
+    z-index: 3000;
   }
-
-  h3 {
-    margin-top: 4.5%;
-    color: rgba(128, 128, 128, 0.765);
-    font-weight: 500;
-  }
-
-  button {
-    z-index: 10;
-    margin-top: 5rem;
-    color: rgba(111, 12, 12, 0.765);
-    font-weight: 500;
-  }
-
 </style>

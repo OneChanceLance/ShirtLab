@@ -15,7 +15,7 @@
   </nav>
   <transition name="slide">
     <MenuContent :active-menu="activeMenu ?? undefined" :header-title="headerTitle ?? undefined"
-      :selected-text="selectedText" :draw="draw" @closeMenu="() => openMenu('', '')"
+      :selectedObject="selectedObject" :draw="draw" @closeMenu="() => openMenu('', '')"
       @uploadObject="(type: string, payload: any) => emit('uploadObject', type, payload)"
       @select-clothing="emit('selectClothing', $event)" @center-text="$emit('center-text')"
       @duplicate-text="emit('duplicate-text')" @bring-forward="emit('bring-forward')" @send-back="emit('send-back')" />
@@ -27,9 +27,9 @@
   import MenuButton from "./MenuButton.vue";
   import { ref, type Ref } from "vue";
   import MenuContent from "./MenuContent.vue";
-  import type { TextObject } from "../shirtlab/types";
+  import type { ImageObject, TextObject } from "../shirtlab/types";
   defineProps<{
-    selectedText: TextObject | null;
+    selectedObject: TextObject | ImageObject | null;
     draw: () => void;
 
   }>();

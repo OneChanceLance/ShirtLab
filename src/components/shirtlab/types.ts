@@ -12,7 +12,9 @@ export type ImageObject = {
     aspect: number;
     origW: number;
     origH: number;
+    rotation: number;
     isSelected: boolean;
+    isVector?: boolean;
 };
 
 export type TextObject = {
@@ -32,7 +34,7 @@ export type TextObject = {
     z: number;
     w: number;
     h: number;
-
+    effect: TextEffect;
     isSelected: boolean;
 };
 
@@ -87,4 +89,32 @@ export type Category = {
     fontStyle?: string;
     /** Optional text-transform for preview */
     textTransform?: string;
+};
+
+export type EffectName =
+    | 'none'
+    | 'curve'
+    | 'arch'
+    | 'bulge'
+    | 'pinch'
+    | 'wave'
+    | 'pullUp'
+    | 'spreadOut'
+    | 'twist';
+
+export interface EffectOptions {
+    strength: number;
+    radius: number;
+    amplitude: number;
+    frequency: number;
+    twistDeg: number;
+    trackingPx: number;
+    phase: number;
+    power: number;
+    invert?: boolean;
+}
+
+export type TextEffect = {
+    name: EffectName;
+    options: EffectOptions;
 };

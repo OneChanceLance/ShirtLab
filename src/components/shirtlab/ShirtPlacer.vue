@@ -67,15 +67,29 @@
   import RotateIcon from 'vue-material-design-icons/RotateRight.vue'
   import ViewPort from '../../components/shirtlab/Viewports/ViewPort.vue';
   import type { TextObject, ImageObject } from './types'
+  // ADD with the other imports
+  import { withDefaults, getEffectTransform, getEffectAdvance, applyToContext } from '../sideMenu/types/effectsList';
 
   const emit = defineEmits<{
     (e: 'selectText', payload: TextObject): void;
 
   }>();
 
+  const props = defineProps<{
+    clothing?: {
+      name?: string;
+      front?: string;    // URL for front garment image
+      back?: string;     // URL for back garment image
+      grid?: { x: number; y: number; w: number; h: number };
+      colors?: Array<{ background?: string }>; // legacy fallback
+    }
+  }>();
+
+
 
 
   import Zoom from './image.png'
+  import { rotate } from 'three/tsl';
   // Icon component array for handle buttons
   const iconComponents = [DeleteIcon, ResizeIcon, DuplicateIcon, RotateIcon];
   const textIconComponents = [DeleteIcon, ArrowLeftRight, DuplicateIcon, RotateIcon];
@@ -184,16 +198,96 @@
     return { minZ, maxZ };
   }
 
+  // --- Rotated rectangle helpers ---
+  function getRotationRadians(item: { rotation?: number }) {
+    return ((item.rotation || 0) * Math.PI) / 180;
+  }
+
+  function getRotatedCorners(item: { x: number; y: number; w: number; h: number; rotation?: number }) {
+    const cx = item.x + item.w / 2;
+    const cy = item.y + item.h / 2;
+    const rad = getRotationRadians(item);
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    // unrotated corners
+    const TL = { x: item.x, y: item.y };
+    const TR = { x: item.x + item.w, y: item.y };
+    const BL = { x: item.x, y: item.y + item.h };
+    const BR = { x: item.x + item.w, y: item.y + item.h };
+
+    function rot(p: { x: number; y: number }) {
+      const dx = p.x - cx;
+      const dy = p.y - cy;
+      return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+    }
+    return { TL: rot(TL), TR: rot(TR), BL: rot(BL), BR: rot(BR) };
+  }
+
+  // Helper to compute the axis-aligned bounding box corners of a rotated item
+  function getAABBCorners(item: { x: number; y: number; w: number; h: number; rotation?: number }) {
+    const c = getRotatedCorners(item);
+    const minX = Math.min(c.TL.x, c.TR.x, c.BL.x, c.BR.x);
+    const maxX = Math.max(c.TL.x, c.TR.x, c.BL.x, c.BR.x);
+    const minY = Math.min(c.TL.y, c.TR.y, c.BL.y, c.BR.y);
+    const maxY = Math.max(c.TL.y, c.TR.y, c.BL.y, c.BR.y);
+    return {
+      TL: { x: minX, y: minY },
+      TR: { x: maxX, y: minY },
+      BL: { x: minX, y: maxY },
+      BR: { x: maxX, y: maxY },
+    };
+  }
+
+  function pointInRotatedRect(px: number, py: number, item: { x: number; y: number; w: number; h: number; rotation?: number }) {
+    const cx = item.x + item.w / 2;
+    const cy = item.y + item.h / 2;
+    const rad = -getRotationRadians(item); // inverse
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const dx = px - cx;
+    const dy = py - cy;
+    const lx = dx * cos - dy * sin;
+    const ly = dx * sin + dy * cos;
+    return (lx >= -item.w / 2 && lx <= item.w / 2 && ly >= -item.h / 2 && ly <= item.h / 2);
+  }
+
+  // Axis-aligned bounding box (AABB) of the rotated rect
+  function getAABB(item: { x: number; y: number; w: number; h: number; rotation?: number }) {
+    const c = getRotatedCorners(item);
+    const minX = Math.min(c.TL.x, c.TR.x, c.BL.x, c.BR.x);
+    const maxX = Math.max(c.TL.x, c.TR.x, c.BL.x, c.BR.x);
+    const minY = Math.min(c.TL.y, c.TR.y, c.BL.y, c.BR.y);
+    const maxY = Math.max(c.TL.y, c.TR.y, c.BL.y, c.BR.y);
+    return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+  }
+
+  // Translate item so its rotated AABB stays fully inside the grid
+  function clampIntoGrid(item: { x: number; y: number; w: number; h: number; rotation?: number }) {
+    const grid = clothingDetails.value.grid;
+    const a = getAABB(item);
+    let dx = 0, dy = 0;
+    if (a.minX < grid.x) dx = grid.x - a.minX;
+    if (a.maxX > grid.x + grid.w) dx = Math.min(dx, (grid.x + grid.w) - a.maxX);
+    if (a.minY < grid.y) dy = grid.y - a.minY;
+    if (a.maxY > grid.y + grid.h) dy = Math.min(dy, (grid.y + grid.h) - a.maxY);
+    if (dx !== 0 || dy !== 0) {
+      item.x += dx;
+      item.y += dy;
+    }
+  }
+
 
 
   function getHandlePosition(index: number) {
     const img = selectedObject.value as ImageObject;
     if (!img) return { x: 0, y: 0 };
+    const a = getAABBCorners(img);
     switch (index) {
-      case 0: return { x: img.x, y: img.y }; // TL
-      case 1: return { x: img.x + img.w, y: img.y }; // TR
-      case 2: return { x: img.x, y: img.y + img.h }; // BL
-      case 3: return { x: img.x + img.w, y: img.y + img.h }; // BR
+      case 0: return { x: a.TL.x, y: a.TL.y }; // TL (delete)
+      case 1: return { x: a.TR.x, y: a.TR.y }; // TR (resize)
+      case 2: return { x: a.BL.x, y: a.BL.y }; // BL (duplicate)
+      case 3: return { x: a.BR.x, y: a.BR.y }; // BR (rotate)
       default: return { x: 0, y: 0 };
     }
   }
@@ -209,8 +303,15 @@
         const item = images[i];
         if (!item.isSelected) continue;
         const size = handleStyles.size * 2;
-        const hx = item.x + item.w;
-        const hy = item.y;
+        const a = getAABBCorners(item);
+        const handles = [
+          [a.TL.x, a.TL.y],
+          [a.TR.x, a.TR.y],
+          [a.BL.x, a.BL.y],
+          [a.BR.x, a.BR.y],
+        ];
+        const hx = handles[1][0];
+        const hy = handles[1][1];
         if (
           x >= hx - size / 2 && x <= hx + size / 2 &&
           y >= hy - size / 2 && y <= hy + size / 2
@@ -240,10 +341,8 @@
         images.push(imgClone);
         break;
       case 3: // rotate
-        const temp = img.w;
-        img.w = img.h;
-        img.h = temp;
-        img.aspect = img.w / img.h;
+        img.rotation = ((img.rotation || 0) + 90) % 360;
+        clampIntoGrid(img);
         break;
     }
     draw();
@@ -327,16 +426,31 @@
   // If using v-on="selectClothing" directly, receive as prop instead, or use event bus.
   // Here, we'll assume you receive it as a prop or via a custom event.
   function handleClothingSelect(details: any) {
-    console.log(details)
-    if (!details || !details.grid) return;
-    clothingDetails.value = details;
-    // Update shirt background using first color's background if available
-    if (details.colors && details.colors[0].background) {
-      shirtBg.src = details.colors[0].background;
+    console.log(details);
+    if (!details) return;
 
+    if (details.grid) clothingDetails.value = details;
+
+    if (details.front || details.back || (details.colors && details.colors[0]?.background)) {
+      if (details.front) viewToSrc.Front = details.front;
+      if (details.back) {
+        viewToSrc.Back = details.back;
+      } else if (details.front) {
+        viewToSrc.Back = details.front;
+      }
+      if (!details.front && !details.back && details.colors?.[0]?.background) {
+        viewToSrc.Front = details.colors[0].background;
+        viewToSrc.Back = details.colors[0].background;
+      }
+      // SS Activewear swatchId fallback
+      if (details.colors?.[0]?.swatchId) {
+        const sid = details.colors[0].swatchId;
+        viewToSrc.Front = `https://cdn.ssactivewear.com/Images/Color/${sid}_f_fl.jpg`;
+        viewToSrc.Back = `https://cdn.ssactivewear.com/Images/Color/${sid}_b_fl.jpg`;
+      }
+      setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '/tshirt.png');
     }
-    // Update grid limits
-    // Clear images to avoid misalignment
+
     images.splice(0, images.length);
     draw();
   }
@@ -367,15 +481,6 @@
     }
   });
 
-  watch(() => clothingStore.newClothingItem, (item) => {
-    if (item && clothingStore.isCreating && item.image) {
-      shirtBg.onload = () => {
-        shirtBgLoaded.value = true;
-        draw();
-      };
-      shirtBg.src = URL.createObjectURL(item.image);
-    }
-  });
 
   // Keep Pinia store currentGrid in sync when grid boundary is changed
   watch(() => clothingDetails.value.grid, (newGrid) => {
@@ -396,27 +501,74 @@
   const canvasHeight = 1000;
 
   const canvasCursor = ref("default");
-
+  const shirtBgLoaded = ref(false);
+  const shirtBgError = ref<string | null>(null);
   const shirtBg = new window.Image();
-  onMounted(() => {
-    shirtBg.src = viewToSrc[selectedView.value]; // set initial image
-  });
-  const viewToSrc: Record<View, string> = {
-    Front: '/tshirt.png',
-    Back: '/tshirt.png',
-  };
-  watch(selectedView, (newVal: View) => {
-    shirtBg.src = viewToSrc[newVal] || '/tshirt.png';
+  shirtBg.crossOrigin = 'anonymous';
+
+  function setShirtBackground(src?: string | null) {
+    const next = src || '';
+    shirtBgLoaded.value = false;
+    shirtBgError.value = null;
+    if (!next) {
+      shirtBg.src = '';
+      draw();
+      return;
+    }
     shirtBg.onload = () => {
       shirtBgLoaded.value = true;
+      shirtBgError.value = null;
       draw();
     };
-  });
-  const shirtBgLoaded = ref(false);
-  shirtBg.onload = () => {
-    shirtBgLoaded.value = true;
+    shirtBg.onerror = () => {
+      shirtBgLoaded.value = false;
+      shirtBgError.value = `Failed to load shirt image: ${next}`;
+      draw();
+    };
+    shirtBg.src = next;
+  }
+
+  // ---- Garment background transform (for fine alignment) ----
+  const bgTransform = reactive({ offsetX: 0, offsetY: 0, scale: 1 });
+  function setBackgroundTransform(t: { offsetX?: number; offsetY?: number; scale?: number }) {
+    if (typeof t.offsetX === 'number') bgTransform.offsetX = t.offsetX;
+    if (typeof t.offsetY === 'number') bgTransform.offsetY = t.offsetY;
+    if (typeof t.scale === 'number') bgTransform.scale = t.scale;
     draw();
-  };
+  }
+
+  onMounted(() => {
+    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '/tshirt.png');
+  });
+  const viewToSrc = reactive<Record<View, string>>({
+    Front: props.clothing?.front || props.clothing?.colors?.[0]?.background || '',
+    Back: props.clothing?.back || props.clothing?.front || props.clothing?.colors?.[0]?.background || '',
+  });
+  watch(selectedView, (newVal: View) => {
+    setShirtBackground(viewToSrc[newVal] || viewToSrc.Front || '');
+  });
+  watch(() => props.clothing, (c) => {
+    if (!c) return;
+
+    if (c.grid) clothingDetails.value.grid = { ...c.grid };
+
+    if (c.front) viewToSrc.Front = c.front;
+    if (c.back) {
+      viewToSrc.Back = c.back;
+    } else if (c.front) {
+      viewToSrc.Back = c.front;
+    }
+
+    if (!c.front && !c.back && c.colors?.[0]?.background) {
+      viewToSrc.Front = c.colors[0].background;
+      viewToSrc.Back = c.colors[0].background;
+    }
+
+    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '/tshirt.png');
+
+    images.splice(0, images.length);
+    draw();
+  }, { immediate: true, deep: true });
 
   // Each placed image object: { img, x, y, w, h, aspect, origW, origH, isSelected }
   let dragOffset = { x: 0, y: 0 };
@@ -457,14 +609,26 @@
 
   function drawShirtBg(ctx: CanvasRenderingContext2D) {
     if (shirtBgLoaded.value) {
-      // Draw the shirt background centered
-      const scale = Math.min(canvasWidth / shirtBg.width, canvasHeight / shirtBg.height);
-      const w = shirtBg.width * scale;
-      const h = shirtBg.height * scale;
-      ctx.drawImage(shirtBg, (canvasWidth - w) / 2, (canvasHeight - h) / 2, w, h);
+      // Draw the shirt background using contain-fit, then apply tweakable transform
+      const iw = (shirtBg as any).naturalWidth || shirtBg.width || 1;
+      const ih = (shirtBg as any).naturalHeight || shirtBg.height || 1;
+
+      const baseScale = Math.min(canvasWidth / iw, canvasHeight / ih);
+      const w = iw * baseScale * (bgTransform.scale || 1);
+      const h = ih * baseScale * (bgTransform.scale || 1);
+
+      const x = (canvasWidth - w) / 2 + (bgTransform.offsetX || 0);
+      const y = (canvasHeight - h) / 2 + (bgTransform.offsetY || 0) - 150;
+
+      ctx.drawImage(shirtBg, x, y, w, h);
     } else {
-      ctx.fillStyle = "#f4f4f4";
-      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+      if (shirtBgError.value) {
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Image unavailable', canvasWidth / 2, canvasHeight / 2);
+      }
     }
   }
 
@@ -687,17 +851,32 @@
     for (const obj of ordered) {
       if (obj.type === 'image') {
         const item = obj as any;
+
         ctx.globalAlpha = 1;
-        ctx.drawImage(item.img, item.x, item.y, item.w, item.h);
+
+        ctx.save();
+        const cx = item.x + item.w / 2;
+        const cy = item.y + item.h / 2;
+        ctx.translate(cx, cy);
+        ctx.rotate(((item.rotation || 0) * Math.PI) / 180);
+        // draw the image centered in its frame; frame size stays constant
+        ctx.drawImage(item.img, -item.w / 2, -item.h / 2, item.w, item.h);
+        ctx.restore();
 
         if (item.isSelected) {
+          const { TL, TR, BR, BL } = getRotatedCorners(item);
           ctx.save();
           ctx.strokeStyle = '#0af';
           ctx.lineWidth = 2;
-          ctx.strokeRect(item.x, item.y, item.w, item.h);
           ctx.fillStyle = 'rgba(0, 200, 255, 0.15)';
-          ctx.fillRect(item.x, item.y, item.w, item.h);
-          selectedObject.value = item;
+          ctx.beginPath();
+          ctx.moveTo(TL.x, TL.y);
+          ctx.lineTo(TR.x, TR.y);
+          ctx.lineTo(BR.x, BR.y);
+          ctx.lineTo(BL.x, BL.y);
+          ctx.closePath();
+          ctx.stroke();
+          ctx.fill();
           ctx.restore();
         }
       } else if (obj.type === 'text') {
@@ -705,7 +884,13 @@
         // layout
         const block = layoutTextBlock(ctx, t);
 
+
         // styles
+        const eff = t.effect && t.effect.name ? t.effect : { name: 'none', options: withDefaults('none') };
+        const effName = eff.name;
+        const effOpts = withDefaults(eff.name, eff.options); // ensure all knobs present
+
+
         ctx.font = `${block.pxSize}px ${t.font}`;
         ctx.fillStyle = t.color;
         ctx.strokeStyle = t.outlineColor;
@@ -713,17 +898,61 @@
         ctx.textBaseline = 'alphabetic';
         ctx.textAlign = t.alignment;
 
-        // draw lines
         let y = t.y;
-        for (let i = 0; i < block.lines.length; i++) {
-          const ln = block.lines[i];
-          const startX = block.lineX[i];
-          ctx.fillText(ln, startX, y);
-          if (t.outlineColor && t.outlineColor !== 'None' && t.outlineWidth > 0) {
-            ctx.strokeText(ln, startX, y);
+
+        for (let li = 0; li < block.lines.length; li++) {
+          const ln = block.lines[li];
+          const anchor = block.lineX[li]; // your existing anchor (left/center/right)
+
+          const chars = Array.from(ln);
+          if (!chars.length) { y += block.lineHeight; continue; }
+
+          // measure base advances once
+          const advances = chars.map(ch => ctx.measureText(ch).width);
+          const baseWidth = advances.reduce((a, b) => a + b, 0);
+
+          // compute per-glyph extra spacing from the effect
+          const extras = chars.map((_, i) => getEffectAdvance(effName));
+          const extraSum = extras.reduce((a, b) => a + b, 0);
+          const effWidth = baseWidth + extraSum;
+
+          // convert your anchor to a leftX that preserves position
+          // - left: anchor is left edge
+          // - center: keep center fixed -> shift left by effWidth/2
+          // - right: keep right edge fixed -> shift left by effWidth
+          let leftX = anchor;
+          if (t.alignment === 'center') leftX = anchor - effWidth / 2;
+          else if (t.alignment === 'right') leftX = anchor - effWidth;
+
+          // per-glyph draw at fixed baseline y, starting from leftX
+          let cursorX = leftX;
+          for (let i = 0; i < chars.length; i++) {
+            // inside the glyph loop
+            const ch = chars[i];
+            const tr = getEffectTransform(effName, i, chars.length, effOpts);
+
+            // pivot: top of the glyph for 'spreadOut'; baseline for others
+            let originY = 0;
+            if (effName === 'spreadOut') {
+              const m = ctx.measureText(ch);
+              const ascent = m.actualBoundingBoxAscent ?? block.pxSize * 0.8; // fallback if metric missing
+              originY = -ascent; // pivot at top so scaleY grows downward
+            }
+
+            ctx.save();
+            applyToContext(ctx, cursorX, y, tr, 0, originY); // originX=0 is fine
+            ctx.fillText(ch, 0, 0);
+            if (t.outlineColor && t.outlineColor !== 'None' && t.outlineWidth > 0) {
+              ctx.strokeText(ch, 0, 0);
+            }
+            ctx.restore();
+
+            cursorX += advances[i] /* + extras[i] if you had any */;
           }
+
           y += block.lineHeight;
         }
+
 
         if (t.isSelected) {
           ctx.save();
@@ -732,7 +961,7 @@
           ctx.fillStyle = 'rgba(0, 200, 255, 0.15)';
           ctx.strokeRect(block.boundsLeft, block.boundsTop, block.width, block.height);
           ctx.fillRect(block.boundsLeft, block.boundsTop, block.width, block.height);
-          selectedObject.value = t;
+          // Do not set selectedObject.value here!
           ctx.restore();
         }
       }
@@ -759,7 +988,7 @@
           if (tIndex !== -1) return { type: 'text', index: tIndex };
         }
       } else if (obj.type === 'image') {
-        if (x >= obj.x && x <= obj.x + obj.w && y >= obj.y && y <= obj.y + obj.h) {
+        if (pointInRotatedRect(x, y, obj)) {
           const iIndex = images.findIndex(im => im.id === obj.id);
           if (iIndex !== -1) return { type: 'image', index: iIndex };
         }
@@ -803,13 +1032,13 @@
     if (sel && sel.type === 'image' && (sel as any).showHandles) {
       const item = sel as ImageObject;
       const size = handleStyles.size; // smaller hit area, matches startDrag
+      const a = getAABBCorners(item);
       const handles: [number, number][] = [
-        [item.x, item.y],                         // TL (delete)
-        [item.x + item.w, item.y],                // TR (resize)
-        [item.x, item.y + item.h],                // BL (duplicate)
-        [item.x + item.w, item.y + item.h],       // BR (rotate)
+        [a.TL.x, a.TL.y],
+        [a.TR.x, a.TR.y],
+        [a.BL.x, a.BL.y],
+        [a.BR.x, a.BR.y],
       ];
-
       for (let h = 0; h < handles.length; h++) {
         const [hx, hy] = handles[h];
         if (x >= hx - size / 2 && x <= hx + size / 2 &&
@@ -1119,29 +1348,33 @@
     // Only allow resizing from TR handle (index 1)
     if (resizeHandleIndex === 1 && resizingImageIndex !== -1) {
       const item = images[resizingImageIndex];
+      // Keep frame aspect constant regardless of rotation
+      const effAspect = item.aspect;
       // Anchor at bottom-left
       const [anchorX, anchorY] = [item.x, item.y + item.h];
       // Calculate new width and maintain aspect ratio
       let newW = x - anchorX;
       newW = Math.max(20, newW); // minimum width
-      let newH = newW / item.aspect;
+      let newH = newW / effAspect;
       // Clamp to grid bounds
       const grid = clothingDetails.value.grid;
       const maxW = grid.x + grid.w - anchorX;
       const maxH = anchorY - grid.y;
       if (newW > maxW) {
         newW = maxW;
-        newH = newW / item.aspect;
+        newH = newW / effAspect;
       }
       if (newH > maxH) {
         newH = maxH;
-        newW = newH * item.aspect;
+        newW = newH * effAspect;
       }
       item.w = newW;
       item.h = newH;
       // Keep bottom-left anchor fixed
       item.y = anchorY - item.h;
       item.isSelected = true;
+      // Ensure rotated AABB stays within grid after resize
+      clampIntoGrid(item);
       draw();
       return;
     }
@@ -1150,9 +1383,8 @@
     item.x = x - dragOffset.x;
     item.y = y - dragOffset.y;
 
-    // Constrain position to guide area when dragging
-    item.x = Math.max(clothingDetails.value.grid.x, Math.min(item.x, clothingDetails.value.grid.x + clothingDetails.value.grid.w - item.w));
-    item.y = Math.max(clothingDetails.value.grid.y, Math.min(item.y, clothingDetails.value.grid.y + clothingDetails.value.grid.h - item.h));
+    // Constrain position using rotated AABB so it stays inside grid
+    clampIntoGrid(item);
 
     draw();
   }
@@ -1234,6 +1466,7 @@
           origH: img.height / 3,
           isSelected: true,
           z: zCounter++,
+          rotation: 0,
         });
 
         draw();
@@ -1261,6 +1494,8 @@
         h: 60,
         isSelected: true,
         z: zCounter++,
+        // 👇 NEW
+        effect: { name: 'none', options: withDefaults('none') },
       });
 
       draw();
@@ -1270,19 +1505,34 @@
   // TODO: Add watcher or reactive logic to update selected text object when text tab values change
 
   function updateClothing(details: any) {
-    if (!details || !details.grid) return;
-    clothingDetails.value = details;
-    // Use first color's background as shirt background if available
-    if (details.colors && details.colors[0]?.background) {
-      shirtBg.onload = () => {
-        shirtBgLoaded.value = true;
-        draw();
-      };
-      shirtBg.src = details.colors[0].background;
+    if (!details) return;
+
+    // Update grid if present
+    if (details.grid) {
+      clothingDetails.value = details;
     }
-    // Update grid limits by reference
-    // (the draw function always uses clothingDetails.value.grid)
-    // Clear placed images
+
+    // Prefer explicit front/back; fallback to colors[0].background
+    const bg = details.colors?.[0]?.background;
+    if (details.front || details.back || bg) {
+      if (details.front) viewToSrc.Front = details.front;
+      if (details.back) viewToSrc.Back = details.back;
+      if (!details.front && !details.back && bg) {
+        viewToSrc.Front = bg;
+        viewToSrc.Back = bg;
+      }
+      // SS Activewear swatchId fallback
+      if (details.colors?.[0]?.swatchId) {
+        const sid = details.colors[0].swatchId;
+        viewToSrc.Front = `https://cdn.ssactivewear.com/Images/Color/${sid}_f_fl.jpg`;
+        viewToSrc.Back = `https://cdn.ssactivewear.com/Images/Color/${sid}_b_fl.jpg`;
+      }
+      setShirtBackground(viewToSrc[selectedView.value] || '/tshirt.png');
+      if (details.bgTransform) {
+        setBackgroundTransform(details.bgTransform);
+      }
+    }
+
     images.splice(0, images.length);
     draw();
   }
@@ -1303,12 +1553,31 @@
     },
     { deep: true }
   );
+  function setClothingImages(imgs: { front?: string; back?: string }) {
+    if (imgs.front) viewToSrc.Front = imgs.front;
+    if (imgs.back) {
+      viewToSrc.Back = imgs.back;
+    } else if (imgs.front) {
+      viewToSrc.Back = imgs.front;
+    }
+    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '/tshirt.png');
+    draw();
+  }
 
   defineExpose({
-    openFileDialog, updateClothing, uploadObject, selectedObject, draw, centerSelectedText, duplicateSelectedText,
+    openFileDialog,
+    updateClothing,
+    setClothingImages,
+    setBackgroundTransform,
+    uploadObject,
+    selectedObject,
+    draw,
+    centerSelectedText,
+    duplicateSelectedText,
     bringSelectedForward,
     sendSelectedBack,
   });
+
 
 </script>
 
