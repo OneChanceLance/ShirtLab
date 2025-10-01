@@ -1,21 +1,21 @@
 <template>
-  <SideMenu :selected-object="selectedObject" :draw="draw" @uploadObject="handleUploadObject"
-    @selectClothing="handleClothingSelect" @center-text="shirtPlacerRef.centerSelectedText()"
-    @duplicate-text="shirtPlacerRef?.duplicateSelectedText && shirtPlacerRef.duplicateSelectedText()"
-    @bring-forward="shirtPlacerRef?.bringSelectedForward && shirtPlacerRef.bringSelectedForward()"
-    @send-back="shirtPlacerRef?.sendSelectedBack && shirtPlacerRef.sendSelectedBack()" />
+  <SideMenu :active-menu="props.activeMenu"
+    @request-menu="(menu: string, title: string) => emit('request-menu', menu, title)" />
   <CanvasArea>
     <ShirtPlacer ref="shirtPlacerRef" />
   </CanvasArea>
 </template>
 
 <script setup lang="ts">
-  import { ref, computed, onMounted, onBeforeUnmount, type Ref, nextTick } from 'vue';
+  import { ref, computed, onMounted, onBeforeUnmount, nextTick, watchEffect, watch } from 'vue';
   import type { ImageObject, TextObject } from './types';
   import CanvasArea from '../canvasArea/CanvasArea.vue';
   import SideMenu from '../sideMenu/SideMenu.vue';
   import ShirtPlacer from './ShirtPlacer.vue';
-  import { getClothesByAnyCode, getClothingItemById, getClothingItemByAnyCode, getClothingMetaById } from './clothesDb';
+  import { getClothesByAnyCode, getClothingItemById, getClothingItemByAnyCode } from './clothesDb';
+
+  const props = defineProps<{ activeMenu?: string | null }>();
+  const emit = defineEmits<{ (e: 'request-menu', menu: string, title: string): void; }>();
 
   const DEBUG = false; // flip to false in prod
 
@@ -248,29 +248,59 @@
   const selectedObject = computed<TextObject | ImageObject | null>(() => {
     return (shirtPlacerRef.value as any)?.selectedObject ?? null;
   });
+
+  watchEffect(() => {
+    const placer = shirtPlacerRef.value as any;
+    console.log('[ShirtLab/watchEffect] raw ref ->', placer?.selectedObject);
+    console.log('[ShirtLab/watchEffect] selectedObject ->', selectedObject.value);
+  });
+
+  watch(
+    () => (shirtPlacerRef.value as any)?.selectedObject?.value,
+    (val) => {
+      console.log('[ShirtLab/watch] selectedObject ->', val);
+    },
+    { immediate: true }
+  );
+
   function draw() {
     shirtPlacerRef.value?.draw();
+  }
+
+  function centerSelectedText() {
+    shirtPlacerRef.value?.centerSelectedText();
+  }
+
+  function duplicateSelectedText() {
+    shirtPlacerRef.value?.duplicateSelectedText?.();
+  }
+
+  function bringSelectedForward() {
+    shirtPlacerRef.value?.bringSelectedForward?.();
+  }
+
+  function sendSelectedBack() {
+    shirtPlacerRef.value?.sendSelectedBack?.();
+  }
+
+  function updateClothing(details: any) {
+    shirtPlacerRef.value?.updateClothing(details);
+  }
+
+  function uploadObject(type: string, payload: any) {
+    shirtPlacerRef.value?.uploadObject(type, payload);
   }
 
   defineExpose({
     loadProductByCode,
     applyExternalClothing,
+    selectedObject,
+    draw,
+    centerSelectedText,
+    duplicateSelectedText,
+    bringSelectedForward,
+    sendSelectedBack,
+    updateClothing,
+    uploadObject,
   });
-  function centerSelectedText() {
-    shirtPlacerRef.value?.centerSelectedText();
-  }
-
-  function openFileDialogFromMenu() {
-    shirtPlacerRef.value?.openFileDialog();
-  }
-
-  function handleClothingSelect(details: any) {
-    shirtPlacerRef.value?.updateClothing(details);
-  }
-
-  function handleUploadObject(type: string, payload: any) {
-    console.trace()
-    console.log(type, payload)
-    shirtPlacerRef.value?.uploadObject(type, payload);
-  }
 </script>

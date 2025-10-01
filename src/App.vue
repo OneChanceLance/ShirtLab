@@ -9,6 +9,7 @@
           @uploadObject="handleUploadObjectFromMenu" @select-clothing="handleSelectClothingFromMenu"
           @center-text="handleCenterTextFromMenu" @duplicate-text="handleDuplicateTextFromMenu"
           @bring-forward="handleBringForwardFromMenu" @send-back="handleSendBackFromMenu" />
+
       </div>
     </div>
     <SsActivewearMenu class="ssa-floating-menu" @variant-selected="handleVariantSelected" />
@@ -16,7 +17,7 @@
 </template>
 
 <script setup lang="ts">
-  import { ref, computed, type ComputedRef } from 'vue';
+  import { ref, computed, watch, watchEffect, type Ref } from 'vue';
   import ShirtLab from './components/shirtlab/ShirtLab.vue';
   import SsActivewearMenu from './components/SsActivewearMenu.vue';
   import MenuContent from './components/sideMenu/MenuContent.vue';
@@ -24,7 +25,6 @@
 
   type ShirtLabExpose = {
     applyExternalClothing(payload: any): void;
-    selectedObject: ComputedRef<TextObject | ImageObject | null>;
     draw(): void;
     uploadObject(type: string, payload: any): void;
     updateClothing(details: any): void;
@@ -34,12 +34,22 @@
     sendSelectedBack(): void;
   };
 
+  const selectedObject = computed<TextObject | ImageObject | null>(() => {
+
+
+    return (shirtLabRef.value as any)?.selectedObject ?? null;
+
+
+  });
+  const shirtPlacerRef = ref();
   const shirtLabRef = ref<ShirtLabExpose | null>(null);
 
   const activeMenu = ref<string>('');
   const headerTitle = ref<string>('');
+  const isSelectionMenu = ref(false);
 
   function handleMenuRequest(menu: string, title: string) {
+    isSelectionMenu.value = false;
     if (activeMenu.value === menu) {
       activeMenu.value = '';
       headerTitle.value = '';
@@ -49,8 +59,57 @@
     headerTitle.value = title;
   }
 
-  const selectedObject = computed(() => shirtLabRef.value?.selectedObject.value ?? null);
+
   const draw = () => shirtLabRef.value?.draw();
+
+  watchEffect(() => {
+    const lab = shirtLabRef.value;
+    console.log('[App/watchEffect] lab.selectedObject ref ->', lab?.selectedObject);
+    console.log('[App/watchEffect] selectedObject ->', selectedObject);
+  });
+
+  watch(selectedObject, (val) => {
+    console.log('[App] selectedObject ->', val);
+
+    if (!val) {
+      if (isSelectionMenu.value) {
+        activeMenu.value = '';
+        headerTitle.value = '';
+        isSelectionMenu.value = false;
+      }
+      return;
+    }
+
+    const type = (val as any).type;
+    if (type === 'text') {
+      activeMenu.value = 'Text';
+      headerTitle.value = 'Add Text';
+      isSelectionMenu.value = true;
+      return;
+    }
+
+    if (type === 'image') {
+      const isShape = Boolean((val as any).shapeMeta || (typeof (val as any).name === 'string' && (val as any).name.startsWith('shape:')));
+      if (isShape) {
+        activeMenu.value = 'Shapes';
+        headerTitle.value = 'Choose Shape';
+        isSelectionMenu.value = true;
+        return;
+      }
+
+      const isVector = Boolean((val as any).isVector || (typeof (val as any).name === 'string' && (val as any).name.includes(':')));
+      if (isVector) {
+        activeMenu.value = 'Icons';
+        headerTitle.value = 'Select Icon';
+        isSelectionMenu.value = true;
+        return;
+      }
+
+      activeMenu.value = 'Upload';
+      headerTitle.value = 'Choose File to Upload';
+      isSelectionMenu.value = true;
+    }
+  }, { immediate: true });
 
   function handleUploadObjectFromMenu(type: string, payload: any) {
     shirtLabRef.value?.uploadObject(type, payload);
@@ -88,6 +147,8 @@
       bgTransform: imagery.bgTransform,
     });
   }
+
+
 </script>
 
 <style scoped>
@@ -119,7 +180,9 @@
     justify-content: center;
     align-items: center;
     box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35);
+    position: relative;
   }
+
 
   .ssa-floating-menu {
     position: fixed;

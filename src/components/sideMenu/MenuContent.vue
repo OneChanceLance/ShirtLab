@@ -319,7 +319,7 @@
   /* =========================================================
      IMPORTS
      =======================================================*/
-  import { ref, computed, watch, onMounted, onBeforeUnmount, toRef, nextTick, type Ref } from 'vue';
+  import { ref, computed, watch, watchEffect, onMounted, onBeforeUnmount, toRef, nextTick, type Ref } from 'vue';
 
   import PlusIcon from 'vue-material-design-icons/Plus.vue';
   import CloseIcon from 'vue-material-design-icons/Close.vue';
@@ -356,6 +356,14 @@
 
   // make the prop reactive (and typed)
   const selectedObject = toRef(props, 'selectedObject') as Ref<TextObject | ImageObject | any | null>;
+
+  watch(selectedObject, (val) => {
+    console.log('[MenuContent/watch] selectedObject ->', val);
+  }, { immediate: true });
+
+  watchEffect(() => {
+    console.log('[MenuContent/watchEffect] selectedObject ->', selectedObject.value);
+  });
 
   /* =========================================================
      GLOBAL UI STATE
@@ -1725,7 +1733,9 @@
   .slide-menu {
     position: fixed;
     top: 1;
-    transform: translate(0px, -17.5rem);
+    left: 1;
+    right: 1;
+    transform: translate(-180%, -17.5rem);
     width: 30rem;
     max-height: 100%;
     background-color: rgb(255, 255, 255);
