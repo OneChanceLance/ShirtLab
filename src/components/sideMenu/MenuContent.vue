@@ -90,13 +90,9 @@
         <div v-else-if="activeMenu === 'Colors'" class="product-colors-tab">
           <div v-if="!productColors.length" class="color-status">No product colors loaded yet.</div>
           <div v-else class="product-colors-grid">
-            <button
-              v-for="(color, index) in productColors"
-              :key="color.id || color.name || index"
-              class="product-color-button"
-              :class="{ 'is-selected': index === productColorIndex }"
-              @click="handleProductColorClick(index)"
-            >
+            <button v-for="(color, index) in productColors" :key="color.id || color.name || index"
+              class="product-color-button" :class="{ 'is-selected': index === productColorIndex }"
+              @click="handleProductColorClick(index)">
               <span class="product-color-swatch" :style="swatchStyle(color)"></span>
               <span class="product-color-name">{{ color.name || `Color ${index + 1}` }}</span>
             </button>
@@ -335,7 +331,7 @@
   import { useClothingStore } from '../../stores/clothingStore';
   import { supabase } from '../../supabase';
   import type { ImageObject, TextObject } from '../shirtlab/types';
-import { COLOR_OPTIONS, PRODUCT_COLORS, selectedProductColorIndex, setSelectedProductColorIndex } from './types/colorList';
+  import { COLOR_OPTIONS, PRODUCT_COLORS, selectedProductColorIndex, setSelectedProductColorIndex } from './types/colorList';
   import WeightSlider from './TextAssets/WeightSlider.vue';
 
   /* =========================================================
@@ -1728,7 +1724,8 @@ import { COLOR_OPTIONS, PRODUCT_COLORS, selectedProductColorIndex, setSelectedPr
 <style scoped lang="scss">
   .slide-menu {
     position: fixed;
-    top: 0;
+    top: 1;
+    transform: translate(0px, -17.5rem);
     width: 30rem;
     max-height: 100%;
     background-color: rgb(255, 255, 255);
