@@ -1,60 +1,28 @@
 <template>
   <nav class="side-menu">
-    <MenuButton variant="Upload" label="Upload" :active="activeMenu === 'Upload'"
-      @click="() => openMenu('Upload', 'Choose File to Upload')" />
-    <MenuButton variant="Text" label="Text" :active="activeMenu === 'Text'"
-      @click="() => openMenu('Text', 'Add Text')" />
-    <MenuButton variant="Icons" label="Icons" :active="activeMenu === 'Icons'"
-      @click="() => openMenu('Icons', 'Select Icon')" />
-    <MenuButton variant="Shapes" label="Shapes" :active="activeMenu === 'Shapes'"
-      @click="() => openMenu('Shapes', 'Choose Shape')" />
-    <MenuButton variant="Colors" label="Product Colors" :active="activeMenu === 'Colors'"
-      @click="() => openMenu('Colors', 'Pick a Product Color')" />
-    <MenuButton variant="Sports" label="Sports Personalization" :active="activeMenu === 'Sports'"
-      @click="() => openMenu('Sports', 'Add Sports Info')" />
+    <MenuButton variant="Upload" label="Upload" :active="props.activeMenu === 'Upload'"
+      @click="() => requestMenu('Upload', 'Choose File to Upload')" />
+    <MenuButton variant="Text" label="Text" :active="props.activeMenu === 'Text'"
+      @click="() => requestMenu('Text', 'Add Text')" />
+    <MenuButton variant="Icons" label="Icons" :active="props.activeMenu === 'Icons'"
+      @click="() => requestMenu('Icons', 'Select Icon')" />
+    <MenuButton variant="Shapes" label="Shapes" :active="props.activeMenu === 'Shapes'"
+      @click="() => requestMenu('Shapes', 'Choose Shape')" />
+    <MenuButton variant="Colors" label="Product Colors" :active="props.activeMenu === 'Colors'"
+      @click="() => requestMenu('Colors', 'Pick a Product Color')" />
+    <MenuButton variant="Sports" label="Sports Personalization" :active="props.activeMenu === 'Sports'"
+      @click="() => requestMenu('Sports', 'Add Sports Info')" />
   </nav>
-  <transition name="slide">
-    <MenuContent :active-menu="activeMenu ?? undefined" :header-title="headerTitle ?? undefined"
-      :selectedObject="selectedObject" :draw="draw" @closeMenu="() => openMenu('', '')"
-      @uploadObject="(type: string, payload: any) => emit('uploadObject', type, payload)"
-      @select-clothing="emit('selectClothing', $event)" @center-text="$emit('center-text')"
-      @duplicate-text="emit('duplicate-text')" @bring-forward="emit('bring-forward')" @send-back="emit('send-back')" />
-  </transition>
 </template>
 
 <script setup lang="ts">
 
   import MenuButton from "./MenuButton.vue";
-  import { ref, type Ref } from "vue";
-  import MenuContent from "./MenuContent.vue";
-  import type { ImageObject, TextObject } from "../shirtlab/types";
-  defineProps<{
-    selectedObject: TextObject | ImageObject | null;
-    draw: () => void;
+  const props = defineProps<{ activeMenu?: string | null }>();
+  const emit = defineEmits<{ (e: 'request-menu', menu: string, title: string): void; }>();
 
-  }>();
-  const emit = defineEmits<{
-    (e: "selectTool", tool: string): void;
-    (e: "uploadObject", type: string, payload: any): void;
-    (e: "selectClothing", details: any): void;
-    (e: 'center-text'): void;
-    (e: 'duplicate-text'): void;
-    (e: 'bring-forward'): void;
-    (e: 'send-back'): void;
-  }>();
-
-
-  const activeMenu = ref<string>('');
-  const headerTitle = ref<string>('');
-
-  function openMenu(menu: string, title?: string) {
-    if (activeMenu.value === menu) {
-      activeMenu.value = '';
-      headerTitle.value = '';
-    } else {
-      activeMenu.value = menu;
-      headerTitle.value = title ?? '';
-    }
+  function requestMenu(menu: string, title: string) {
+    emit('request-menu', menu, title);
   }
 </script>
 
