@@ -69,6 +69,7 @@
 <script setup lang="ts">
   import { computed, onMounted, ref } from 'vue';
   import { supabase } from '../../supabase';
+  import { extractSizeMeasurementsFromPromo } from '../../utils/sizeMeasurements';
 
   type ClothingRecord = Record<string, any> & {
     id?: string;
@@ -192,6 +193,7 @@
       }
 
       const defaultColor = product.colors.find((c: any) => c.id === product.defaultColorId) || product.colors[0];
+      const sizeMeasurements = extractSizeMeasurementsFromPromo(raw?.Product);
       const grid = {
         x: 175,
         y: 150,
@@ -220,6 +222,10 @@
         default_color_id: product.defaultColorId ?? null,
         updated_at: new Date().toISOString(),
       };
+
+      if (sizeMeasurements.length) {
+        (record as any).size_measurements = sizeMeasurements;
+      }
 
       try {
         const existingId = await lookupExistingClothingId(code);
