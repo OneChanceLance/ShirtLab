@@ -15,6 +15,8 @@ export type ImageObject = {
     rotation: number;
     isSelected: boolean;
     isVector?: boolean;
+    name?: string;
+    shapeMeta?: Record<string, any>;
 };
 
 export type TextObject = {

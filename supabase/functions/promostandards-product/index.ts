@@ -194,7 +194,8 @@ function normalizeProduct(productId: string, productData: any) {
   const productName = marketing?.productName ?? marketing?.ProductName ?? root?.productName ?? root?.ProductName ?? description ?? productId;
   const defaultColorId = marketing?.primaryColor?.colorId ?? marketing?.PrimaryColor?.ColorId ?? root?.defaultColorId ?? root?.DefaultColorId ?? null;
 
-  const colors = extractColors(root);
+  const basePrice = extractPrimaryPrice(root);
+  const colors = extractColors(root, basePrice);
 
   return {
     id: productId,
@@ -206,6 +207,83 @@ function normalizeProduct(productId: string, productData: any) {
   };
 }
 
+function toArray<T>(value: T | T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : value != null ? [value] : [];
+}
+
+function extractPrimaryPrice(product: any): NormalizedPriceBreak | null {
+  const groups = toArray(
+    product?.ProductPriceGroupArray?.ProductPriceGroup ??
+    product?.productPriceGroupArray?.productPriceGroup ??
+    product?.productPriceGroups ??
+    product?.ProductPriceGroups ??
+    []
+  );
+
+  let chosen: NormalizedPriceBreak | null = null;
+
+  for (const group of groups) {
+    const description = group?.description ?? group?.Description ?? null;
+    const groupName = group?.groupName ?? group?.GroupName ?? null;
+    const currency = group?.currency ?? group?.Currency ?? null;
+
+    const priceEntries = toArray(
+      group?.ProductPriceArray?.ProductPrice ??
+      group?.productPriceArray?.productPrice ??
+      group?.prices ??
+      group?.Prices ??
+      []
+    );
+
+    for (const entry of priceEntries) {
+      const rawPrice = entry?.price ?? entry?.Price ?? entry?.listPrice ?? entry?.ListPrice ?? entry?.netPrice ?? entry?.NetPrice;
+      const price = typeof rawPrice === 'string' ? Number.parseFloat(rawPrice) : Number(rawPrice);
+      if (!Number.isFinite(price)) continue;
+
+      const rawQty = entry?.quantityMin ?? entry?.QuantityMin ?? entry?.minQuantity ?? entry?.MinQuantity;
+      const qty = typeof rawQty === 'string' ? Number.parseInt(rawQty, 10) : Number(rawQty);
+      const quantityMin = Number.isFinite(qty) ? qty : null;
+
+      const candidate: NormalizedPriceBreak = {
+        price,
+        currency: (entry?.currency ?? entry?.Currency ?? currency) ?? null,
+        quantityMin,
+        discountCode: entry?.discountCode ?? entry?.DiscountCode ?? null,
+        description,
+        groupName,
+      };
+
+      if (!chosen) {
+        chosen = candidate;
+        continue;
+      }
+
+      const currentQty = chosen.quantityMin ?? Number.POSITIVE_INFINITY;
+      const candidateQty = candidate.quantityMin ?? Number.POSITIVE_INFINITY;
+
+      if (candidateQty < currentQty) {
+        chosen = candidate;
+        continue;
+      }
+
+      if (candidateQty === currentQty && candidate.price < (chosen.price ?? Number.POSITIVE_INFINITY)) {
+        chosen = candidate;
+      }
+    }
+  }
+
+  return chosen;
+}
+
+interface NormalizedPriceBreak {
+  price: number | null;
+  currency: string | null;
+  quantityMin: number | null;
+  discountCode: string | null;
+  description: string | null;
+  groupName: string | null;
+}
+
 interface NormalizedColor {
   id: string;
   name: string;
@@ -215,12 +293,13 @@ interface NormalizedColor {
   media?: any[];
   frontUrl?: string | null;
   backUrl?: string | null;
+  price?: number | null;
+  currency?: string | null;
+  quantityMin?: number | null;
 }
 
-function extractColors(product: any): NormalizedColor[] {
+function extractColors(product: any, basePrice?: NormalizedPriceBreak | null): NormalizedColor[] {
   const colorsMap = new Map<string, NormalizedColor & { sizeSet: Set<string>; configSet: Set<string> }>();
-
-  const toArray = (value: any) => (Array.isArray(value) ? value : value ? [value] : []);
 
   function upsertColor(colorId: string, name: string | null, hex: string | null, sizes: string[], configId: string | null) {
     if (!colorId) return;
@@ -289,6 +368,9 @@ function extractColors(product: any): NormalizedColor[] {
     hex: entry.hex,
     sizes: Array.from(entry.sizeSet.values()).sort(),
     configurationIds: Array.from(entry.configSet.values()),
+    price: basePrice?.price ?? null,
+    currency: basePrice?.currency ?? null,
+    quantityMin: basePrice?.quantityMin ?? null,
   }));
 }
 

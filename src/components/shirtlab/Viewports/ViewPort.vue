@@ -1,19 +1,30 @@
 <template>
-    <div class="container" @click="model = label" :key="label">
+    <div class="container" :class="{ active: isActive }" @click="$emit('select', label)" :key="label">
         <div class="viewport">
-            <img />
+            <img :src="previewSrc" :alt="`${label} preview`" />
         </div>
-        <div :class="['activeLine', { active: model === label }]"></div>
+        <div :class="['activeLine', { active: isActive }]"></div>
         <span>{{ label }}</span>
     </div>
 </template>
 
 <script setup lang="ts">
-    defineProps({
-        label: String
+    const props = defineProps({
+        label: {
+            type: String,
+            required: true
+        },
+        previewSrc: {
+            type: String,
+            default: ''
+        },
+        isActive: {
+            type: Boolean,
+            default: false
+        }
     })
 
-    const model = defineModel<string>()
+    defineEmits<{ (e: 'select', label: string): void }>();
 </script>
 
 <style scoped lang="scss">
@@ -31,7 +42,17 @@
         height: 5rem;
         margin: 0 auto;
         margin-bottom: -0.15rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
 
+        img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            pointer-events: none;
+        }
     }
 
     .activeLine {
