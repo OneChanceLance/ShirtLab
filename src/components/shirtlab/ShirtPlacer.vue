@@ -74,11 +74,6 @@
   import { findMeasurementForSize, findSpecValueInInches, normalizeSizeLabel } from '../../utils/sizeMeasurements';
   import type { SizeMeasurementEntry, SizeMeasurementSpec } from '../../utils/sizeMeasurements';
 
-  const emit = defineEmits<{
-    (e: 'selectText', payload: TextObject): void;
-
-  }>();
-
   const props = defineProps<{
     clothing?: {
       name?: string;
@@ -105,7 +100,6 @@
 
 
   import Zoom from './image.png'
-  import { rotate } from 'three/tsl';
   // Icon component array for handle buttons
   const iconComponents = [DeleteIcon, ResizeIcon, DuplicateIcon, RotateIcon];
   const textIconComponents = [DeleteIcon, ArrowLeftRight, DuplicateIcon, RotateIcon];
@@ -125,8 +119,7 @@
   function handleTextMouseDown(index: number, event: MouseEvent) {
     event.preventDefault();
     if (index !== 1) return; // only BR resize
-    const t = selectedObject.value as TextObject;
-    if (!t) return;
+    if (!selectedObject.value || selectedObject.value.type !== 'text') return;
 
     resizingText = true;
     mouseDown.value = true;
@@ -578,8 +571,8 @@
 
   function markGridManual() { }
 
-  function switchView(next: View, options: { skipStore?: boolean; force?: boolean } = {}) {
-    const { skipStore = false, force = false } = options;
+  function switchView(next: View, options: { skipStore?: boolean } = {}) {
+    const { skipStore = false } = options;
     // Allow switching even if already on the side, always store state and update preview
     const previous = selectedView.value;
     if (!skipStore) {
@@ -1223,14 +1216,6 @@
     }
   }
 
-  function deleteSelectedImage() {
-    const idx = images.findIndex((img) => img.isSelected);
-    if (idx !== -1) {
-      images.splice(idx, 1);
-      draw();
-    }
-  }
-
   function onFileChange(e: Event) {
     const files = (e.target as HTMLInputElement).files;
     if (!files) return;
@@ -1238,7 +1223,10 @@
       const reader = new FileReader();
       reader.onload = function (ev) {
         // Use uploadObject for image
-        uploadObject('image', { imgUrl: ev.target?.result });
+        const result = ev.target?.result;
+        if (typeof result === 'string') {
+          uploadObject('image', { imgUrl: result });
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -1562,7 +1550,7 @@
           const baseWidth = advances.reduce((a, b) => a + b, 0);
 
           // compute per-glyph extra spacing from the effect
-          const extras = chars.map((_, i) => getEffectAdvance(effName));
+          const extras = chars.map(() => getEffectAdvance(effName));
           const extraSum = extras.reduce((a, b) => a + b, 0);
           const effWidth = baseWidth + extraSum;
 
@@ -1683,7 +1671,6 @@
     }
 
     if (sel && sel.type === 'text' && (sel as any).showHandles) {
-      const t = sel as TextObject;
       // bottom-right handle for text (resize), matching your render positions
       const br = getTextHandlePosition('bottomRight');
       const size = handleStyles.size;
@@ -1770,7 +1757,9 @@
     const found = findObjectAt(x, y);
     // Select images
     const imgIdx = found?.type === 'image' ? found.index : -1;
-    images.forEach((img, i) => img.isSelected = false);
+    images.forEach((img) => {
+      img.isSelected = false;
+    });
     texts.forEach(t => t.isSelected = false);
 
     if (found) {

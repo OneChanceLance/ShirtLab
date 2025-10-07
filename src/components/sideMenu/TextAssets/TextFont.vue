@@ -8,13 +8,6 @@
   </div>
 </template>
 
-<script setup lang="ts">
-    import { ref } from 'vue';
-
-    const tabOpened = ref(true)
-
-</script>
-
 <style scoped>
 .style-container {
   display: flex;
