@@ -530,14 +530,6 @@
     }
   }
 
-  function startBlank() {
-    setProductColors([]);
-    setSelectedProductColorIndex(0);
-    activeItemId.value = null;
-    showClothingPicker.value = false;
-    (shirtPlacerRef.value as any)?.clearClothing?.();
-  }
-
   function applyClothingItem(item: ClothingItemRow) {
     const colors = normalizeColors((item as any)?.colors);
     setProductColors(colors);
