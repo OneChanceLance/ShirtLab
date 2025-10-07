@@ -42,7 +42,7 @@
     type Align = 'left' | 'center' | 'right';
     type TabOption = Record<string, Align>;
 
-    const props = withDefaults(defineProps<{
+    withDefaults(defineProps<{
         options: TabOption[];
         valueKey: string;
         size?: 'default' | 'small';

@@ -195,7 +195,7 @@ function spreadOutTransform(t: number, _n: number, opts: EffectOptions): CharTra
 
     return { x: 0, y: 0, rotation: 0, scaleX, scaleY };
 }
-export function getEffectAdvance(name: EffectName): number {
+export function getEffectAdvance(_name: EffectName): number {
     return 0; // Spread Out doesn't add tracking anymore
 }
 // Convenience: apply a transform to a canvas 2D context before drawing a glyph

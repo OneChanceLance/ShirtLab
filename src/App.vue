@@ -24,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-  import { ref, computed, watch, watchEffect, type Ref } from 'vue';
+  import { ref, computed, watch, watchEffect } from 'vue';
   import ShirtLab from './components/shirtlab/ShirtLab.vue';
   import SsActivewearMenu from './components/SsActivewearMenu.vue';
   import MenuContent from './components/sideMenu/MenuContent.vue';
@@ -58,7 +58,6 @@
 
 
   });
-  const shirtPlacerRef = ref();
   const shirtLabRef = ref<ShirtLabExpose | null>(null);
 
   const activeMenu = ref<string>('');
