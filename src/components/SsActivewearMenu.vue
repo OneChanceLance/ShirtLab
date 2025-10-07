@@ -13,19 +13,29 @@
           {{ loading ? 'Loading…' : 'Fetch' }}
         </button>
       </div>
-      <p class="ssa-menu__hint">Uses PromoStandards ProductData &amp; MediaContent services.</p>
     </form>
 
     <p v-if="error" class="ssa-menu__error">{{ error }}</p>
 
-    <section v-if="product" class="ssa-menu__results">
-      <div class="ssa-menu__product-header">
+    <section v-if="product || colors.length" class="ssa-menu__results">
+      <div v-if="product" class="ssa-menu__product-header">
         <h3>
           {{ product.brand || 'S&S Activewear' }}
           <span v-if="product.name"> · {{ product.name }}</span>
           <span class="ssa-menu__style"> · {{ product.id }}</span>
         </h3>
-        <p v-if="product.description">{{ product.description }}</p>
+
+      </div>
+
+      <div v-if="colors.length" class="ssa-menu__block">
+        <h4>Colors</h4>
+        <div class="ssa-menu__colors">
+          <button type="button" class="ssa-menu__color" :class="{ 'is-selected': index === selectedColorIndex }"
+            v-for="(color, index) in colors" :key="color.id || index" @click="selectColor(index)">
+            <span class="ssa-menu__swatch" :style="swatchStyle(color)"></span>
+            <span class="ssa-menu__color-name">{{ color.name || color.id || `Color ${index + 1}` }}</span>
+          </button>
+        </div>
       </div>
 
       <div v-if="availableSizes.length" class="ssa-menu__block">
@@ -37,23 +47,18 @@
         </select>
       </div>
 
-      <dl class="ssa-menu__meta" v-if="activeColor">
-        <div v-if="activeColor.colorStyleID">
-          <dt>Style ID</dt>
-          <dd>{{ activeColor.colorStyleID }}</dd>
-        </div>
-        <div v-if="activeColor.sku">
-          <dt>SKU</dt>
-          <dd>{{ activeColor.sku }}</dd>
-        </div>
-      </dl>
     </section>
   </section>
 </template>
 
 <script setup lang="ts">
   import { computed, ref, watch } from 'vue';
-  import { PRODUCT_COLORS, setProductColors, selectedProductColorIndex, setSelectedProductColorIndex } from './sideMenu/types/colorList';
+  import {
+    PRODUCT_COLORS,
+    setProductColors,
+    selectedProductColorIndex,
+    setSelectedProductColorIndex,
+  } from './sideMenu/types/colorList';
 
   interface PromoMedia {
     url: string;
@@ -73,6 +78,9 @@
     media?: PromoMedia[];
     frontUrl?: string | null;
     backUrl?: string | null;
+    price?: number | null;
+    currency?: string | null;
+    quantityMin?: number | null;
   }
 
   interface PromoProduct {
@@ -111,7 +119,10 @@
   const selectedColorIndex = ref(0);
   const selectedSize = ref<string | null>(null);
 
-  const colors = computed(() => product.value?.colors ?? []);
+  const colors = computed(() => {
+    if (product.value?.colors?.length) return product.value.colors;
+    return PRODUCT_COLORS.value;
+  });
   const activeColor = computed(() => colors.value[selectedColorIndex.value] ?? null);
   const availableSizes = computed(() => activeColor.value?.sizes ?? []);
   const previewFront = computed(() => {
@@ -153,6 +164,17 @@
   watch(() => selectedProductColorIndex.value, (idx) => {
     if (idx !== selectedColorIndex.value && idx >= 0 && idx < colors.value.length) {
       selectColor(idx);
+    }
+  });
+
+  watch(colors, (list) => {
+    if (!list.length) {
+      selectedColorIndex.value = 0;
+      selectedSize.value = null;
+      return;
+    }
+    if (selectedColorIndex.value >= list.length) {
+      selectColor(Math.max(0, list.length - 1));
     }
   });
 
@@ -238,6 +260,9 @@
       frontUrl: front,
       backUrl: back,
       media: color.media ?? [],
+      price: color.price ?? null,
+      currency: color.currency ?? null,
+      quantityMin: color.quantityMin ?? null,
     } as Record<string, unknown>;
 
     emit('variant-selected', {

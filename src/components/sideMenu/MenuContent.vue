@@ -16,48 +16,9 @@
 
       <div class="slide-menu-content">
         <!-- CLOTHING: only “Create New” + Create Form (no selection UI) -->
-        <div v-if="activeMenu === 'Clothing'">
-          <div v-if="!showCreateForm">
-            <button class="style-btn" @click="startCreating" style="display:flex;align-items:center;gap:0.4rem;">
-              <PlusIcon /> Create New Clothing
-            </button>
-          </div>
-
-          <div v-if="showCreateForm" class="create-form">
-            <button @click="cancelCreating" class="back-btn" style="align-self: flex-start; margin-bottom: 0.5rem;">←
-              Back</button>
-
-            <input :class="['style-text']" v-model="newClothingName" placeholder="Name" />
-
-            <input type="text" v-model="selectedBrand" placeholder="Brand" class="style-text"
-              @focus="showBrandSuggestions = true" @click="showBrandSuggestions = true" />
-            <div v-if="filteredBrands.length" class="brand-suggestions">
-              <div v-for="brand in filteredBrands" :key="brand" class="brand-suggestion-item"
-                @click="selectBrand(brand)">
-                <img :src="getBrandLogo(brand)" alt="" class="brand-logo-suggestion" />
-                <span>{{ brand }}</span>
-              </div>
-            </div>
-
-            <StyleOptions label="Gender" :options="gendersList" :model-value="newClothingGenders" :valueKey="'code'"
-              :display-key="'label'" />
-            <StyleOptions label="Style" :options="categories" :model-value="newClothingCategory" :valueKey="'category'"
-              :display-key="'name'" />
-            <StyleOptions label="Size" :options="allSizes" :model-value="newClothingSizes" multiple />
-
-            <span id="colors-span">Colors
-              <button id="create-color">
-                <PlusIcon />
-              </button>
-            </span>
-
-
-            <button @click="saveNewClothing">Upload to Database</button>
-          </div>
-        </div>
 
         <!-- UPLOAD -->
-        <div v-else-if="activeMenu === 'Upload'">
+        <div v-if="activeMenu === 'Upload'">
           <input ref="fileInput" type="file" accept="image/*" style="display: none" @change="onFileChange" />
           <div class="upload-container" @click="openFileDialog" @dragover="handleDragOver" @dragleave="handleDragLeave"
             @drop="handleDrop" :class="{ 'drag-hover': isDragging }">
@@ -94,7 +55,11 @@
               class="product-color-button" :class="{ 'is-selected': index === productColorIndex }"
               @click="handleProductColorClick(index)">
               <span class="product-color-swatch" :style="swatchStyle(color)"></span>
-              <span class="product-color-name">{{ color.name || `Color ${index + 1}` }}</span>
+              <div class="product-color-meta">
+                <span class="product-color-name">{{ color.name || `Color ${index + 1}` }}</span>
+                <span v-if="colorHasPrice(color)" class="product-color-price">{{ colorPriceLabel(color) }}</span>
+                <span class="product-color-sizes">{{ colorSizesLabel(color) }}</span>
+              </div>
             </button>
           </div>
         </div>
@@ -328,7 +293,6 @@
   import StyleOptions from './StyleOptions.vue';
   import FontPage from './FontPage.vue';
 
-  import { useClothingStore } from '../../stores/clothingStore';
   import { supabase } from '../../supabase';
   import type { ImageObject, TextObject } from '../shirtlab/types';
   import { COLOR_OPTIONS, PRODUCT_COLORS, selectedProductColorIndex, setSelectedProductColorIndex } from './types/colorList';
@@ -1225,36 +1189,40 @@
   // Helper to ensure shapeMeta is present on selectedObject (if not, create it)
   function ensureShapeMeta(so: any): ShapeMeta | undefined {
     if (!so) return undefined;
-    if (!so.shapeMeta) {
-      const info = parseShapeFromAny(so);
-      const key = info.key || 'rect';
-      const item = SHAPES.find(s => s.key === key);
+    if (so.shapeMeta && typeof so.shapeMeta === 'object') return so.shapeMeta as ShapeMeta;
 
-      // sensible defaults
-      const outlineOnly = new Set(['line-h', 'line-v', 'plus', 'cross', 'check']);
-      const defaultStrokeWidth = outlineOnly.has(key) ? 8 : 2;
+    const info = parseShapeFromAny(so);
+    if (!info.key) return undefined;
 
-      const meta: ShapeMeta = {
-        key,
-        shapeType: (info.type as ShapeType) || item?.type || 'rect',
-        style: ((info.meta?.style as 'filled' | 'outline') || (item?.init?.style as any) || 'filled'),
-        fill: (info.meta?.fill as string) || '#000000',
-        stroke: (info.meta?.stroke as string) || '#000000',
-        strokeWidth: Number.isFinite(info.meta?.strokeWidth as any) ? (info.meta!.strokeWidth as number) : defaultStrokeWidth,
-        cornerRadius: Number.isFinite(info.meta?.cornerRadius as any) ? (info.meta!.cornerRadius as number) : (item?.init?.cornerRadius ?? 12),
-        points: Number.isFinite(info.meta?.points as any) ? (info.meta!.points as number) : (item?.init?.points ?? 5),
-        sides: Number.isFinite(info.meta?.sides as any) ? (info.meta!.sides as number) : (item?.init?.sides ?? (item?.type === 'polygon' ? 6 : 0)),
-        width: 512,
-        height: 512,
-        previewPath: item?.previewPath,
-        previewPoints: item?.previewPoints,
-      };
-      so.shapeMeta = meta;
-      if (typeof so.name !== 'string' || !so.name.startsWith('shape:')) {
-        try { so.name = `shape:${key}`; } catch { }
-      }
+    const key = info.key;
+    const item = SHAPES.find(s => s.key === key);
+    const metaSource = info.meta ?? {};
+
+    const outlineOnly = new Set(['line-h', 'line-v', 'plus', 'cross', 'check']);
+    const defaultStrokeWidth = outlineOnly.has(key) ? 8 : 2;
+
+    const meta: ShapeMeta = {
+      key,
+      shapeType: (info.type as ShapeType) || (metaSource.shapeType as ShapeType) || item?.type || 'rect',
+      style: ((metaSource.style as 'filled' | 'outline') || (item?.init?.style as any) || 'filled'),
+      fill: (metaSource.fill as string) || '#000000',
+      stroke: (metaSource.stroke as string) || '#000000',
+      strokeWidth: Number.isFinite(metaSource.strokeWidth as any) ? (metaSource.strokeWidth as number) : defaultStrokeWidth,
+      cornerRadius: Number.isFinite(metaSource.cornerRadius as any) ? (metaSource.cornerRadius as number) : (item?.init?.cornerRadius ?? 12),
+      points: Number.isFinite(metaSource.points as any) ? (metaSource.points as number) : (item?.init?.points ?? 5),
+      sides: Number.isFinite(metaSource.sides as any) ? (metaSource.sides as number) : (item?.init?.sides ?? (item?.type === 'polygon' ? 6 : 0)),
+      width: 512,
+      height: 512,
+      previewPath: (metaSource.previewPath as string) || item?.previewPath,
+      previewPoints: (metaSource.previewPoints as string) || item?.previewPoints,
+    };
+
+    so.shapeMeta = meta;
+    if (typeof so.name !== 'string' || !so.name.startsWith('shape:')) {
+      try { so.name = `shape:${key}`; } catch { }
     }
-    return so.shapeMeta as ShapeMeta;
+
+    return meta;
   }
 
   // expose reactive wrappers for controls (use ensureShapeMeta)
@@ -1496,7 +1464,6 @@
   /* =========================================================
      CLOTHING CREATE FLOW (brand, sizes, genders)
      =======================================================*/
-  const clothingStore = useClothingStore();
   const isCreating = ref(false);
 
   // brand suggestions
@@ -1571,6 +1538,171 @@
     return style;
   }
 
+  const SIZE_ORDER = [
+    'NB',
+    '3M', '6M', '9M', '12M', '18M', '24M',
+    '2T', '3T', '4T', '5T',
+    'YXS', 'YS', 'YM', 'YL', 'YXL',
+    'XXXS', 'XXS', 'XS', 'XS/S',
+    'S', 'S/M',
+    'M', 'M/L',
+    'L', 'L/XL',
+    'XL', 'XL/2XL', 'XLT',
+    '1X', '1XL',
+    '2XL', '2XL/3XL', '2XLT',
+    '3XL', '3XL/4XL', '3XLT',
+    '4XL', '4XL/5XL',
+    '5XL', '6XL', '7XL', '8XL',
+    'OS',
+  ];
+
+  const SIZE_PRIORITY = new Map(SIZE_ORDER.map((code, idx) => [code, idx]));
+
+  const SIZE_ALIASES: Record<string, string> = {
+    'SM': 'S',
+    'SMALL': 'S',
+    'SML': 'S',
+    'S/P': 'S',
+    'SMALLMEDIUM': 'S/M',
+    'SM/MD': 'S/M',
+    'SMALL/MEDIUM': 'S/M',
+    'MEDIUM': 'M',
+    'MED': 'M',
+    'MD': 'M',
+    'M/LARGE': 'M/L',
+    'ML': 'M/L',
+    'MEDIUM/LARGE': 'M/L',
+    'LARGE': 'L',
+    'LG': 'L',
+    'LRG': 'L',
+    'L/XLARGE': 'L/XL',
+    'L/XL': 'L/XL',
+    'LARGE/XLARGE': 'L/XL',
+    'XLARGE': 'XL',
+    'X-LARGE': 'XL',
+    'EXTRALARGE': 'XL',
+    'XLG': 'XL',
+    'X-LARGE/TALL': 'XLT',
+    'XL/TALL': 'XLT',
+    'XLTALL': 'XLT',
+    '1X': '1XL',
+    '1XL/2XL': 'XL/2XL',
+    '2X': '2XL',
+    'XXL': '2XL',
+    'XX-LARGE': '2XL',
+    '2XLARGE': '2XL',
+    '2X-LARGE': '2XL',
+    '2X/TALL': '2XLT',
+    '2XLT': '2XLT',
+    '3X': '3XL',
+    'XXXL': '3XL',
+    'XXX-LARGE': '3XL',
+    '3XLARGE': '3XL',
+    '3X/TALL': '3XLT',
+    '3XLT': '3XLT',
+    '4X': '4XL',
+    'XXXXL': '4XL',
+    '4XLARGE': '4XL',
+    '4XL/5XL': '4XL/5XL',
+    '5X': '5XL',
+    'XXXXXL': '5XL',
+    '6X': '6XL',
+    'XXXXXXL': '6XL',
+    '7X': '7XL',
+    '8X': '8XL',
+    'OSFA': 'OS',
+    'OSFM': 'OS',
+    'ONESIZE': 'OS',
+    'ONESIZE': 'OS',
+    'ONE-SIZE': 'OS',
+    'ONESZ': 'OS',
+    'ONESIZEFITALL': 'OS',
+    'ONESIZEFITSALL': 'OS',
+    'ONESIZEFITSMOST': 'OS',
+    'UNISEX': 'OS',
+    'ADJ': 'OS',
+    'ADJUSTABLE': 'OS',
+    'YSM': 'YS',
+    'YMD': 'YM',
+    'YLG': 'YL',
+    'YOUTHSMALL': 'YS',
+    'YOUTHMEDIUM': 'YM',
+    'YOUTHLARGE': 'YL',
+  };
+
+  function normalizeSizeToken(value: string) {
+    if (typeof value !== 'string') return '';
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    const collapsed = trimmed.toUpperCase().replace(/\s+/g, '');
+    return SIZE_ALIASES[collapsed] ?? collapsed;
+  }
+
+  function sizeRank(value: string): number {
+    const normalized = normalizeSizeToken(value);
+    if (!normalized) return Number.POSITIVE_INFINITY;
+    const ranked = SIZE_PRIORITY.get(normalized);
+    if (ranked !== undefined) return ranked;
+    if (normalized.endsWith('T')) {
+      const base = normalized.slice(0, -1);
+      const baseRank = SIZE_PRIORITY.get(base);
+      if (baseRank !== undefined) return baseRank + 0.25;
+    }
+    const numericMatch = normalized.match(/^(\d+)(X+)L$/);
+    if (numericMatch) {
+      const steps = Math.max(Number.parseInt(numericMatch[1], 10), numericMatch[2].length);
+      const baseRank = SIZE_PRIORITY.get('XL');
+      if (baseRank !== undefined) return baseRank + steps;
+    }
+    return Number.POSITIVE_INFINITY;
+  }
+
+  function compareSizes(a: string, b: string) {
+    const rankA = sizeRank(a);
+    const rankB = sizeRank(b);
+    const aIsFinite = Number.isFinite(rankA);
+    const bIsFinite = Number.isFinite(rankB);
+    if (aIsFinite && bIsFinite && rankA !== rankB) {
+      return rankA - rankB;
+    }
+    if (aIsFinite && !bIsFinite) return -1;
+    if (!aIsFinite && bIsFinite) return 1;
+    const normA = normalizeSizeToken(a);
+    const normB = normalizeSizeToken(b);
+    return normA.localeCompare(normB);
+  }
+
+  function colorSizesLabel(color: any) {
+    const sizes = Array.isArray(color?.sizes) ? color.sizes.filter(Boolean) : [];
+    if (!sizes.length) return '—';
+    const sorted = sizes.slice().sort(compareSizes);
+    return `${sorted.join(' · ')}`;
+  }
+
+  const currencyFormatters = new Map<string, Intl.NumberFormat>();
+
+  function colorHasPrice(color: any) {
+    return typeof color?.price === 'number' && Number.isFinite(color.price);
+  }
+
+  function colorPriceLabel(color: any) {
+    const amount = typeof color?.price === 'number' ? color.price : Number.NaN;
+    if (!Number.isFinite(amount)) return '';
+    const currency = typeof color?.currency === 'string' && color.currency.trim() ? color.currency.trim().toUpperCase() : 'USD';
+    let formatted: string;
+    try {
+      const formatter = currencyFormatters.get(currency) ?? new Intl.NumberFormat('en-US', { style: 'currency', currency });
+      currencyFormatters.set(currency, formatter);
+      formatted = formatter.format(amount);
+    } catch {
+      formatted = `${currency} ${amount.toFixed(2)}`;
+    }
+    const minimum = typeof color?.quantityMin === 'number' && Number.isFinite(color.quantityMin) && color.quantityMin > 1
+      ? ` · Min ${color.quantityMin}`
+      : '';
+    return `${formatted}${minimum}`;
+  }
+
   async function fetchSSActivewearColors() {
     if (!ssactivewearUrl.value) return;
     isFetchingColors.value = true;
@@ -1609,105 +1741,12 @@
   }
 
   /* =========================================================
-     CLOTHING HELPERS (create/save/cancel)
-     =======================================================*/
-  function autoSetClothingImageAndSendToStore() {
-    newClothingImage.value = ssactivewearColors.value[0]?.colorBackground || '';
-
-    clothingStore.createClothing({
-      name: newClothingName.value,
-      category: newClothingCategory.value,
-      sizes: newClothingSizes.value,
-      genders: newClothingGenders.value,
-      grid: clothingStore.currentGrid ? { ...clothingStore.currentGrid } : {},
-      brand: selectedBrand.value,
-      colors: ssactivewearColors.value.map((color: any) => ({
-        name: color.name || color,
-        colorBackground: color.colorBackground || '',
-        colorStyleID: color.colorStyleID || '',
-        background: color.background || '',
-      })),
-    });
-  }
-
-  function startCreating() {
-    isCreating.value = true;
-    showCreateForm.value = true;
-    clothingStore.setIsCreating(true);
-  }
-
-  async function saveNewClothing() {
-    // Optional: upload manual image to Supabase Storage
-    let uploadedSupabaseUrl = '';
-    if (newClothingImage.value && newClothingImage.value.name) {
-      const { data, error } = await supabase
-        .storage
-        .from('clothing-images')
-        .upload(`public/${Date.now()}-${newClothingImage.value.name}`, newClothingImage.value);
-      if (error) {
-        console.error('Supabase upload error:', error);
-        return;
-      }
-      uploadedSupabaseUrl = supabase.storage.from('clothing-images').getPublicUrl(data.path).data.publicUrl;
-    }
-
-    // DB row
-    const { error: insertError } = await supabase.from('clothing_items').insert([
-      {
-        name: newClothingName.value,
-        category: newClothingCategory.value,
-        sizes: newClothingSizes.value,
-        genders: newClothingGenders.value,
-        grid: clothingStore.currentGrid ? { ...clothingStore.currentGrid } : {},
-        brand: selectedBrand.value,
-        colors: ssactivewearColors.value.map((color: any) => ({
-          name: color.name || color,
-          colorBackground: color.colorBackground || '',
-          colorStyleID: color.colorStyleID || '',
-          background: color.background || '',
-        })),
-      },
-    ]);
-    if (insertError) {
-      console.error('Supabase insert error:', insertError);
-      return;
-    }
-
-    // mirror to local store
-    clothingStore.createClothing({
-      name: newClothingName.value,
-      category: newClothingCategory.value,
-      sizes: newClothingSizes.value,
-      genders: newClothingGenders.value,
-      grid: clothingStore.currentGrid ? { ...clothingStore.currentGrid } : {},
-      brand: selectedBrand.value,
-      colors: ssactivewearColors.value.map((color: any) => ({
-        name: color.name || color,
-        colorBackground: color.colorBackground || '',
-        colorStyleID: color.colorStyleID || '',
-        background: color.background || '',
-      })),
-    });
-
-    clothingStore.setIsCreating(false);
-    showCreateForm.value = false;
-    isCreating.value = false;
-  }
-
-  function cancelCreating() {
-    showCreateForm.value = false;
-    isCreating.value = false;
-    clothingStore.setIsCreating(false);
-  }
-
-  /* =========================================================
      MENU CONTROLS
      =======================================================*/
   function closeMenu() {
     emit('closeMenu');
     showCreateForm.value = false;
     isCreating.value = false;
-    clothingStore.setIsCreating(false);
   }
 
   /* =========================================================
@@ -1731,11 +1770,9 @@
 
 <style scoped lang="scss">
   .slide-menu {
-    position: fixed;
-    top: 1;
-    left: 1;
-    right: 1;
-    transform: translate(-180%, -17.5rem);
+    position: absolute;
+    top: 0rem;
+    left: 10rem;
     width: 30rem;
     max-height: 100%;
     background-color: rgb(255, 255, 255);
@@ -1934,11 +1971,13 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
+    overflow: auto;
+    max-height: 48vh;
   }
 
   .product-color-button {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 0.6rem;
     padding: 0.5rem 0.75rem;
     border-radius: 0.75rem;
@@ -1946,6 +1985,7 @@
     background: #f8fafc;
     cursor: pointer;
     transition: all 0.2s ease;
+    text-align: left;
   }
 
   .product-color-button.is-selected {
@@ -1957,15 +1997,34 @@
   .product-color-swatch {
     width: 1.5rem;
     height: 1.5rem;
-    border-radius: 999px;
+    border-radius: 7.5px;
     border: 1px solid rgba(15, 23, 42, 0.15);
     background-size: cover;
     background-position: center;
   }
 
+  .product-color-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
   .product-color-name {
     font-size: 0.85rem;
     color: #1f2937;
+    font-weight: 600;
+  }
+
+  .product-color-price {
+    font-size: 0.8rem;
+    color: #2563eb;
+    font-weight: 600;
+  }
+
+  .product-color-sizes {
+    font-size: 0.75rem;
+    color: #475569;
+    line-height: 1.2;
   }
 
   #create-color {
