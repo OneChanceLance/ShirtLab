@@ -69,7 +69,7 @@
             <div class="product-size__header">
               <span class="product-size__label">Size</span>
               <span v-if="selectedProductSize" class="product-size__selection">Selected: {{ selectedProductSize
-              }}</span>
+                }}</span>
             </div>
             <div v-if="sizeAvailabilityNotice" class="product-size__notice" role="status" aria-live="polite">
               {{ sizeAvailabilityNotice }}
@@ -311,12 +311,9 @@
      IMPORTS
      =======================================================*/
   import { ref, computed, watch, watchEffect, onMounted, onBeforeUnmount, toRef, nextTick, type Ref } from 'vue';
-
-  import PlusIcon from 'vue-material-design-icons/Plus.vue';
   import CloseIcon from 'vue-material-design-icons/Close.vue';
   import uploadDark from './assets/uploadDark.png';
 
-  import StyleOptions from './StyleOptions.vue';
   import FontPage from './FontPage.vue';
 
   import { supabase } from '../../supabase';
@@ -630,10 +627,6 @@
       : (previewPreference.find(v => g.variants.includes(v)) ?? g.variants[0]);
     queueMicrotask(() => { syncingVariantFromSelection.value = false; });
   }, { immediate: true });
-
-  function iconUrlWithPrefix(prefix: string, fullName: string, size = 48) {
-    return `https://api.iconify.design/${prefix}/${fullName}.svg?height=${size}`;
-  }
 
   watch(currentVariant, (v) => {
     if (syncingVariantFromSelection.value) return;
@@ -1205,7 +1198,6 @@
   // Booleans used by the template
   const isIconSelected = computed(() => selectionKind.value.isIcon);
   const isShapeImageSelected = computed(() => selectionKind.value.isShape);
-  const isRegularImageSelected = computed(() => selectionKind.value.isImage);
 
   // For template v-ifs (works even if only the identifier is present)
   const selectedShapeType = computed<ShapeType | undefined>(() => {
@@ -1503,19 +1495,8 @@
   const isCreating = ref(false);
 
   // brand suggestions
-  const allBrands = ['BELLA + CANVAS', 'Gildan', 'Hanes', 'Tultex', 'H&M', 'Nike', 'Uniqlo', 'Gap', 'J.Crew'];
   const selectedBrand = ref('');
   const showBrandSuggestions = ref(true);
-  const filteredBrands = computed(() =>
-    showBrandSuggestions.value
-      ? allBrands.filter((b) => b.toLowerCase().includes(selectedBrand.value.toLowerCase()) && selectedBrand.value)
-      : []
-  );
-  function selectBrand(brand: string) {
-    selectedBrand.value = brand;
-    showBrandSuggestions.value = false;
-  }
-
   // live categories & genders (from DB)
   const categories = ref<any[]>([]);
   const gendersList = ref<any[]>([]);
@@ -1531,32 +1512,21 @@
   // new clothing form state
   const showCreateForm = ref(false);
   const newClothingName = ref('');
-  const newClothingCategory = ref('');
-  const newClothingSizes = ref<string[]>([]);
-  const newClothingGenders = ref<string[]>([]);
-  const newClothingImage = ref<any>(null);
 
   // autofill prompt
   const autofillPrompt = ref('');
   const ssactivewearBrand = ref('');
   const ssactivewearStyle = ref('');
 
-  // sizes
-  const allSizes = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
-
   /* =========================================================
      SSACTIVEWEAR FETCH (colors / brand / style)
      =======================================================*/
-  const ssactivewearUrl = ref('');
-  const ssactivewearColors = ref<any[]>([]);
-  const isFetchingColors = ref(false);
-
   const productColors = computed(() => PRODUCT_COLORS.value);
   const productColorIndex = computed(() => selectedProductColorIndex.value);
   const activeProductColor = computed(() => productColors.value[productColorIndex.value] ?? null);
 
   const sizeAvailabilityNotice = ref('');
-  let sizeNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  let sizeNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 
   const availableSizes = computed(() => extractColorSizes(activeProductColor.value));
 
@@ -1618,18 +1588,18 @@
   }
 
   function resetSizeNoticeTimer() {
-    if (sizeNoticeTimer !== null) {
-      window.clearTimeout(sizeNoticeTimer);
-      sizeNoticeTimer = null;
+    if (sizeNoticeTimer !== undefined) {
+      clearTimeout(sizeNoticeTimer);
+      sizeNoticeTimer = undefined;
     }
   }
 
   function showSizeNotice(size: string, colorName: string) {
     resetSizeNoticeTimer();
     sizeAvailabilityNotice.value = `${size} unavailable in ${colorName}`;
-    sizeNoticeTimer = window.setTimeout(() => {
+    sizeNoticeTimer = setTimeout(() => {
       sizeAvailabilityNotice.value = '';
-      sizeNoticeTimer = null;
+      sizeNoticeTimer = undefined;
     }, 4000);
   }
 
@@ -1714,43 +1684,6 @@
     return `${formatted}${minimum}`;
   }
 
-  async function fetchSSActivewearColors() {
-    if (!ssactivewearUrl.value) return;
-    isFetchingColors.value = true;
-    ssactivewearColors.value = [];
-    try {
-      const match = ssactivewearUrl.value.match(/\/([^\/?#]+)$/);
-      const productId = match ? match[1] : null;
-      if (!productId) throw new Error('Could not extract productId from SSActivewear URL');
-
-      const endpoint = 'https://xtjikprktetrshhpbeca.supabase.co/functions/v1/ssactivewear-proxy';
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ productId, url: ssactivewearUrl.value }),
-      });
-      if (!response.ok) throw new Error('Failed to fetch from SSActivewear API');
-
-      const data = await response.json();
-
-      if (Array.isArray(data.colors)) {
-        ssactivewearColors.value = data.colors;
-      }
-      if (data.brand) {
-        autofillPrompt.value = `Autofill brand with "${data.brand}"?`;
-        ssactivewearBrand.value = data.brand;
-      }
-      ssactivewearStyle.value = data.style ? data.style : '';
-    } catch (error) {
-      console.error('Error fetching SSActivewear info:', error);
-    } finally {
-      isFetchingColors.value = false;
-    }
-  }
-
   /* =========================================================
      MENU CONTROLS
      =======================================================*/
@@ -1763,20 +1696,6 @@
   /* =========================================================
      UTILS
      =======================================================*/
-  function getBrandLogo(brand: string) {
-    const logos: Record<string, string> = {
-      ['BELLA + CANVAS']: '/logos/bellacanvas.png',
-      ['Gildan']: '/logos/gildan.png',
-      ['Hanes']: '/logos/hanes.png',
-      ['Tultex']: '/logos/tultex.png',
-      ['H&M']: '/logos/handm.png',
-      ['Nike']: '/logos/nike.jpg',
-      ['Uniqlo']: '/logos/uniqlo.png',
-      ['Gap']: '/logos/gap.png',
-      ['J.Crew']: '/logos/jcrew.png',
-    };
-    return logos[brand] || '';
-  }
 </script>
 
 <style scoped lang="scss">
