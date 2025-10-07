@@ -35,6 +35,7 @@
     selectedProductColorIndex,
     setProductColors,
     setSelectedProductColorIndex,
+    setSelectedProductSize,
   } from './components/sideMenu/types/colorList';
 
   type ShirtLabExpose = {
@@ -166,6 +167,12 @@
     syncProductColors(colorsList, defaultColorId);
     if (!shirtLabRef.value) return;
     const imagery = payload?.imagery ?? {};
+    const sizeMeasurements = Array.isArray(payload?.sizeMeasurements) ? payload.sizeMeasurements : [];
+    const selectedSize = typeof payload?.size === 'string' ? payload.size : null;
+
+    if (Object.prototype.hasOwnProperty.call(payload, 'size')) {
+      setSelectedProductSize(selectedSize);
+    }
 
     shirtLabRef.value.applyExternalClothing({
       front: imagery.front,
@@ -173,6 +180,8 @@
       grid: imagery.grid,
       colors: imagery.colors,
       bgTransform: imagery.bgTransform,
+      size: selectedSize,
+      sizeMeasurements,
     });
   }
 

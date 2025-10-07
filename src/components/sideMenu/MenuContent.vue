@@ -57,10 +57,36 @@
               <span class="product-color-swatch" :style="swatchStyle(color)"></span>
               <div class="product-color-meta">
                 <span class="product-color-name">{{ color.name || `Color ${index + 1}` }}</span>
-                <span v-if="colorHasPrice(color)" class="product-color-price">{{ colorPriceLabel(color) }}</span>
-                <span class="product-color-sizes">{{ colorSizesLabel(color) }}</span>
+
+                <div class="product-color-details">
+                  <span v-if="colorHasPrice(color)" class="product-color-price">{{ colorPriceLabel(color) }}</span>
+                  <span class="product-color-sizes">{{ colorSizesLabel(color) }}</span>
+                </div>
               </div>
             </button>
+          </div>
+          <div class="product-size" :class="{ 'product-size--disabled': !availableSizes.length }">
+            <div class="product-size__header">
+              <span class="product-size__label">Size</span>
+              <span v-if="selectedProductSize" class="product-size__selection">Selected: {{ selectedProductSize
+              }}</span>
+            </div>
+            <div v-if="sizeAvailabilityNotice" class="product-size__notice" role="status" aria-live="polite">
+              {{ sizeAvailabilityNotice }}
+            </div>
+            <div v-if="availableSizes.length" class="product-size__slider">
+              <WeightSlider v-model="sizeSliderIndex" :min="0" :max="availableSizes.length - 1" :step="1"
+                :show-labels="false" class="product-size__weight-slider" />
+              <div class="product-size__scale">
+                <span v-for="(size, idx) in availableSizes" :key="size"
+                  :class="['product-size__scale-label', { 'is-active': idx === activeSizeIndex }]">
+                  {{ size }}
+                </span>
+              </div>
+            </div>
+            <div v-else class="product-size__empty">
+              Size information not available for this color.
+            </div>
           </div>
         </div>
 
@@ -295,7 +321,17 @@
 
   import { supabase } from '../../supabase';
   import type { ImageObject, TextObject } from '../shirtlab/types';
-  import { COLOR_OPTIONS, PRODUCT_COLORS, selectedProductColorIndex, setSelectedProductColorIndex } from './types/colorList';
+  import {
+    COLOR_OPTIONS,
+    PRODUCT_COLORS,
+    selectedProductColorIndex,
+    setSelectedProductColorIndex,
+    selectedProductSize,
+    setSelectedProductSize,
+    extractColorSizes,
+    findMatchingSize,
+    normalizeSizeToken,
+  } from './types/colorList';
   import WeightSlider from './TextAssets/WeightSlider.vue';
 
   /* =========================================================
@@ -1517,10 +1553,101 @@
 
   const productColors = computed(() => PRODUCT_COLORS.value);
   const productColorIndex = computed(() => selectedProductColorIndex.value);
+  const activeProductColor = computed(() => productColors.value[productColorIndex.value] ?? null);
+
+  const sizeAvailabilityNotice = ref('');
+  let sizeNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const availableSizes = computed(() => extractColorSizes(activeProductColor.value));
+
+  let sizeSliderIndexCache = 0;
+
+  const sizeSliderIndex = computed({
+    get: () => {
+      const sizes = availableSizes.value;
+      if (!sizes.length) {
+        sizeSliderIndexCache = 0;
+        return 0;
+      }
+      const current = selectedProductSize.value;
+      if (!current) {
+        sizeSliderIndexCache = Math.min(sizeSliderIndexCache, Math.max(0, sizes.length - 1));
+        return sizeSliderIndexCache;
+      }
+      const currentNorm = normalizeSizeToken(current);
+      const idx = sizes.findIndex((entry) => normalizeSizeToken(entry) === currentNorm);
+      if (idx >= 0) {
+        sizeSliderIndexCache = idx;
+        return idx;
+      }
+      sizeSliderIndexCache = Math.min(sizeSliderIndexCache, Math.max(0, sizes.length - 1));
+      return sizeSliderIndexCache;
+    },
+    set: (value: number) => {
+      const sizes = availableSizes.value;
+      if (!sizes.length) {
+        setSelectedProductSize(null);
+        return;
+      }
+      const clamped = Math.max(0, Math.min(sizes.length - 1, Math.round(value)));
+      sizeSliderIndexCache = clamped;
+      setSelectedProductSize(sizes[clamped]);
+    },
+  });
+
+  const activeSizeIndex = computed(() => {
+    const sizes = availableSizes.value;
+    if (!sizes.length) return -1;
+    const current = selectedProductSize.value;
+    if (!current) return -1;
+    const currentNorm = normalizeSizeToken(current);
+    return sizes.findIndex((entry) => normalizeSizeToken(entry) === currentNorm);
+  });
 
   function handleProductColorClick(index: number) {
-    setSelectedProductColorIndex(index);
+    let sizeUnavailable = false;
+    setSelectedProductColorIndex(index, {
+      onSizeUnavailable: ({ requestedSize, colorName }) => {
+        sizeUnavailable = true;
+        showSizeNotice(requestedSize, colorName);
+      },
+    });
+    if (!sizeUnavailable) {
+      clearSizeNotice();
+    }
   }
+
+  function resetSizeNoticeTimer() {
+    if (sizeNoticeTimer !== null) {
+      window.clearTimeout(sizeNoticeTimer);
+      sizeNoticeTimer = null;
+    }
+  }
+
+  function showSizeNotice(size: string, colorName: string) {
+    resetSizeNoticeTimer();
+    sizeAvailabilityNotice.value = `${size} unavailable in ${colorName}`;
+    sizeNoticeTimer = window.setTimeout(() => {
+      sizeAvailabilityNotice.value = '';
+      sizeNoticeTimer = null;
+    }, 4000);
+  }
+
+  function clearSizeNotice() {
+    sizeAvailabilityNotice.value = '';
+    resetSizeNoticeTimer();
+  }
+
+  watch(selectedProductSize, (size, prev) => {
+    if (!sizeAvailabilityNotice.value) return;
+    if (size && size !== prev) {
+      clearSizeNotice();
+    }
+  });
+
+  onBeforeUnmount(() => {
+    resetSizeNoticeTimer();
+  });
 
   function swatchStyle(color: any) {
     const style: Record<string, string> = {
@@ -1538,145 +1665,29 @@
     return style;
   }
 
-  const SIZE_ORDER = [
-    'NB',
-    '3M', '6M', '9M', '12M', '18M', '24M',
-    '2T', '3T', '4T', '5T',
-    'YXS', 'YS', 'YM', 'YL', 'YXL',
-    'XXXS', 'XXS', 'XS', 'XS/S',
-    'S', 'S/M',
-    'M', 'M/L',
-    'L', 'L/XL',
-    'XL', 'XL/2XL', 'XLT',
-    '1X', '1XL',
-    '2XL', '2XL/3XL', '2XLT',
-    '3XL', '3XL/4XL', '3XLT',
-    '4XL', '4XL/5XL',
-    '5XL', '6XL', '7XL', '8XL',
-    'OS',
-  ];
-
-  const SIZE_PRIORITY = new Map(SIZE_ORDER.map((code, idx) => [code, idx]));
-
-  const SIZE_ALIASES: Record<string, string> = {
-    'SM': 'S',
-    'SMALL': 'S',
-    'SML': 'S',
-    'S/P': 'S',
-    'SMALLMEDIUM': 'S/M',
-    'SM/MD': 'S/M',
-    'SMALL/MEDIUM': 'S/M',
-    'MEDIUM': 'M',
-    'MED': 'M',
-    'MD': 'M',
-    'M/LARGE': 'M/L',
-    'ML': 'M/L',
-    'MEDIUM/LARGE': 'M/L',
-    'LARGE': 'L',
-    'LG': 'L',
-    'LRG': 'L',
-    'L/XLARGE': 'L/XL',
-    'L/XL': 'L/XL',
-    'LARGE/XLARGE': 'L/XL',
-    'XLARGE': 'XL',
-    'X-LARGE': 'XL',
-    'EXTRALARGE': 'XL',
-    'XLG': 'XL',
-    'X-LARGE/TALL': 'XLT',
-    'XL/TALL': 'XLT',
-    'XLTALL': 'XLT',
-    '1X': '1XL',
-    '1XL/2XL': 'XL/2XL',
-    '2X': '2XL',
-    'XXL': '2XL',
-    'XX-LARGE': '2XL',
-    '2XLARGE': '2XL',
-    '2X-LARGE': '2XL',
-    '2X/TALL': '2XLT',
-    '2XLT': '2XLT',
-    '3X': '3XL',
-    'XXXL': '3XL',
-    'XXX-LARGE': '3XL',
-    '3XLARGE': '3XL',
-    '3X/TALL': '3XLT',
-    '3XLT': '3XLT',
-    '4X': '4XL',
-    'XXXXL': '4XL',
-    '4XLARGE': '4XL',
-    '4XL/5XL': '4XL/5XL',
-    '5X': '5XL',
-    'XXXXXL': '5XL',
-    '6X': '6XL',
-    'XXXXXXL': '6XL',
-    '7X': '7XL',
-    '8X': '8XL',
-    'OSFA': 'OS',
-    'OSFM': 'OS',
-    'ONESIZE': 'OS',
-    'ONESIZE': 'OS',
-    'ONE-SIZE': 'OS',
-    'ONESZ': 'OS',
-    'ONESIZEFITALL': 'OS',
-    'ONESIZEFITSALL': 'OS',
-    'ONESIZEFITSMOST': 'OS',
-    'UNISEX': 'OS',
-    'ADJ': 'OS',
-    'ADJUSTABLE': 'OS',
-    'YSM': 'YS',
-    'YMD': 'YM',
-    'YLG': 'YL',
-    'YOUTHSMALL': 'YS',
-    'YOUTHMEDIUM': 'YM',
-    'YOUTHLARGE': 'YL',
-  };
-
-  function normalizeSizeToken(value: string) {
-    if (typeof value !== 'string') return '';
-    const trimmed = value.trim();
-    if (!trimmed) return '';
-    const collapsed = trimmed.toUpperCase().replace(/\s+/g, '');
-    return SIZE_ALIASES[collapsed] ?? collapsed;
-  }
-
-  function sizeRank(value: string): number {
-    const normalized = normalizeSizeToken(value);
-    if (!normalized) return Number.POSITIVE_INFINITY;
-    const ranked = SIZE_PRIORITY.get(normalized);
-    if (ranked !== undefined) return ranked;
-    if (normalized.endsWith('T')) {
-      const base = normalized.slice(0, -1);
-      const baseRank = SIZE_PRIORITY.get(base);
-      if (baseRank !== undefined) return baseRank + 0.25;
+  watch(availableSizes, (sizes) => {
+    if (!sizes.length) {
+      if (selectedProductSize.value !== null) {
+        setSelectedProductSize(null);
+      }
+      return;
     }
-    const numericMatch = normalized.match(/^(\d+)(X+)L$/);
-    if (numericMatch) {
-      const steps = Math.max(Number.parseInt(numericMatch[1], 10), numericMatch[2].length);
-      const baseRank = SIZE_PRIORITY.get('XL');
-      if (baseRank !== undefined) return baseRank + steps;
+    const current = selectedProductSize.value;
+    if (!current) {
+      setSelectedProductSize(sizes[0]);
+      return;
     }
-    return Number.POSITIVE_INFINITY;
-  }
-
-  function compareSizes(a: string, b: string) {
-    const rankA = sizeRank(a);
-    const rankB = sizeRank(b);
-    const aIsFinite = Number.isFinite(rankA);
-    const bIsFinite = Number.isFinite(rankB);
-    if (aIsFinite && bIsFinite && rankA !== rankB) {
-      return rankA - rankB;
+    const match = findMatchingSize(current, sizes);
+    if (match && match !== current) {
+      setSelectedProductSize(match);
+      return;
     }
-    if (aIsFinite && !bIsFinite) return -1;
-    if (!aIsFinite && bIsFinite) return 1;
-    const normA = normalizeSizeToken(a);
-    const normB = normalizeSizeToken(b);
-    return normA.localeCompare(normB);
-  }
+  }, { immediate: true });
 
   function colorSizesLabel(color: any) {
-    const sizes = Array.isArray(color?.sizes) ? color.sizes.filter(Boolean) : [];
+    const sizes = extractColorSizes(color);
     if (!sizes.length) return '—';
-    const sorted = sizes.slice().sort(compareSizes);
-    return `${sorted.join(' · ')}`;
+    return `${sizes.join(' · ')}`;
   }
 
   const currencyFormatters = new Map<string, Intl.NumberFormat>();
@@ -1812,7 +1823,7 @@
   }
 
   .slide-menu-content {
-    margin: 1.5rem;
+    margin: 1rem;
     color: #232323;
     font-family: 'Anek Latin';
     margin-top: 1rem;
@@ -1969,17 +1980,19 @@
 
   .product-colors-grid {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+
     gap: 0.5rem;
     overflow: auto;
-    max-height: 48vh;
+    max-height: 35vh;
   }
 
   .product-color-button {
     display: flex;
+    flex-direction: column;
     align-items: flex-start;
     gap: 0.6rem;
-    padding: 0.5rem 0.75rem;
+    padding: 0.5rem 0.5rem;
     border-radius: 0.75rem;
     border: 1px solid transparent;
     background: #f8fafc;
@@ -1989,13 +2002,13 @@
   }
 
   .product-color-button.is-selected {
-    border-color: #2563eb;
-    background: #e0e7ff;
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+    border-color: #a4cc7e;
+    background: #f8ffe3;
+    box-shadow: 0 0 0 2px rgba(189, 235, 37, 0.2);
   }
 
   .product-color-swatch {
-    width: 1.5rem;
+    width: 100%;
     height: 1.5rem;
     border-radius: 7.5px;
     border: 1px solid rgba(15, 23, 42, 0.15);
@@ -2006,25 +2019,114 @@
   .product-color-meta {
     display: flex;
     flex-direction: column;
+    width: 100%;
     gap: 0.1rem;
   }
 
   .product-color-name {
-    font-size: 0.85rem;
-    color: #1f2937;
-    font-weight: 600;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+
+  .product-color-details {
+    display: flex;
+    justify-content: space-between;
   }
 
   .product-color-price {
-    font-size: 0.8rem;
-    color: #2563eb;
-    font-weight: 600;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #64748b;
   }
 
   .product-color-sizes {
     font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+
+  .product-size {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    padding: 1rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: linear-gradient(135deg, rgba(248, 250, 252, 0.9), rgba(226, 232, 240, 0.75));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+
+  .product-size--disabled {
+    opacity: 0.7;
+  }
+
+  .product-size__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .product-size__label {
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: #475569;
-    line-height: 1.2;
+  }
+
+  .product-size__selection {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #1f2937;
+  }
+
+  .product-size__notice {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #92400e;
+    background: #fef3c7;
+    border: 1px solid rgba(217, 119, 6, 0.35);
+    border-radius: 0.5rem;
+    padding: 0.35rem 0.6rem;
+  }
+
+  .product-size__slider {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .product-size__weight-slider {
+    width: 100%;
+  }
+
+  .product-size__scale {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .product-size__scale-label {
+    flex: 1;
+    text-align: center;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: #64748b;
+    transition: color 0.2s ease, transform 0.2s ease;
+  }
+
+  .product-size__scale-label.is-active {
+    color: #1f2937;
+    font-weight: 700;
+    transform: translateY(-2px);
+  }
+
+  .product-size__empty {
+    font-size: 0.82rem;
+    color: #64748b;
   }
 
   #create-color {
