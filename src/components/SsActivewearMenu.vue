@@ -58,7 +58,11 @@
     setProductColors,
     selectedProductColorIndex,
     setSelectedProductColorIndex,
+    selectedProductSize,
+    setSelectedProductSize,
   } from './sideMenu/types/colorList';
+  import { extractSizeMeasurementsFromPromo } from '../utils/sizeMeasurements';
+  import type { SizeMeasurementEntry } from '../utils/sizeMeasurements';
 
   interface PromoMedia {
     url: string;
@@ -109,6 +113,7 @@
         grid?: any;
         bgTransform?: any;
       };
+      sizeMeasurements?: SizeMeasurementEntry[];
     }): void;
   }>();
 
@@ -117,7 +122,11 @@
   const error = ref('');
   const product = ref<PromoProduct | null>(null);
   const selectedColorIndex = ref(0);
-  const selectedSize = ref<string | null>(null);
+  const selectedSize = computed<string | null>({
+    get: () => selectedProductSize.value,
+    set: (value) => setSelectedProductSize(value ?? null),
+  });
+  const sizeMeasurements = ref<SizeMeasurementEntry[]>([]);
 
   const colors = computed(() => {
     if (product.value?.colors?.length) return product.value.colors;
@@ -147,7 +156,13 @@
 
   watch(activeColor, () => {
     const sizes = availableSizes.value;
-    selectedSize.value = sizes.length ? sizes[0] : null;
+    if (sizes.length) {
+      selectedSize.value = sizes[0];
+    } else if (sizeMeasurements.value.length) {
+      selectedSize.value = sizeMeasurements.value[0].sizeLabel;
+    } else {
+      selectedSize.value = null;
+    }
     emitSelection();
   });
 
@@ -170,13 +185,41 @@
   watch(colors, (list) => {
     if (!list.length) {
       selectedColorIndex.value = 0;
-      selectedSize.value = null;
+      selectedSize.value = sizeMeasurements.value[0]?.sizeLabel ?? null;
       return;
     }
     if (selectedColorIndex.value >= list.length) {
       selectColor(Math.max(0, list.length - 1));
     }
   });
+
+  function swatchStyle(color: PromoColor | null) {
+    const style: Record<string, string> = {
+      backgroundColor: '#e5e7eb',
+      backgroundSize: 'cover',
+      backgroundPosition: 'center',
+    };
+    if (!color) return style;
+
+    const hex = typeof color.hex === 'string' ? color.hex.trim() : '';
+    if (hex) {
+      style.backgroundColor = hex;
+      style.backgroundImage = 'none';
+      return style;
+    }
+
+    const mediaUrl = color.frontUrl
+      || color.media?.find((m) => /front|primary/i.test(m.classType || m.location || m.description || ''))?.url
+      || color.media?.[0]?.url
+      || '';
+
+    if (mediaUrl) {
+      style.backgroundImage = `url(${mediaUrl})`;
+      style.backgroundColor = 'transparent';
+    }
+
+    return style;
+  }
 
   async function fetchProduct() {
     const style = productInput.value.trim();
@@ -209,7 +252,11 @@
         throw new Error('This style did not return any colors.');
       }
 
-      product.value = data.product;
+      sizeMeasurements.value = extractSizeMeasurementsFromPromo(data.raw?.Product);
+      product.value = {
+        ...data.product,
+        sizeMeasurements: sizeMeasurements.value,
+      } as PromoProduct & { sizeMeasurements: SizeMeasurementEntry[] };
       setProductColors(data.product.colors ?? []);
       const colorsList = data.product.colors ?? [];
       let initialIndex = 0;
@@ -218,13 +265,17 @@
         if (idx >= 0) initialIndex = idx;
       }
       selectedColorIndex.value = initialIndex;
-      selectedSize.value = colorsList[initialIndex]?.sizes?.[0] ?? null;
+      const defaultSize = colorsList[initialIndex]?.sizes?.[0]
+        ?? sizeMeasurements.value[0]?.sizeLabel
+        ?? null;
+      selectedSize.value = defaultSize;
       setSelectedProductColorIndex(initialIndex);
     } catch (err: any) {
       console.error('PromoStandards fetch error', err);
       error.value = err?.message || 'Unexpected error fetching product.';
       product.value = null;
       selectedColorIndex.value = 0;
+      sizeMeasurements.value = [];
       selectedSize.value = null;
       setProductColors([]);
       setSelectedProductColorIndex(0);
@@ -273,8 +324,10 @@
         front,
         back,
         colors: [emitColor],
-        bgTransform: null,
+        grid: (color as any)?.grid ?? null,
+        bgTransform: (color as any)?.bgTransform ?? null,
       },
+      sizeMeasurements: sizeMeasurements.value,
     });
   }
 </script>

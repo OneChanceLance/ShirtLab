@@ -12,7 +12,7 @@
             <div class="fake-slider" :style="{ backgroundSize: pct + '% 100%' }"></div>
         </div>
 
-        <div class="labels">
+        <div v-if="showLabels" class="labels">
             <span class="left"><span>Very</span><span>Light</span></span>
             <span class="right"><span>Very</span><span>Heavy</span></span>
         </div>
@@ -27,13 +27,17 @@
         min?: number
         max?: number
         step?: number
+        showLabels?: boolean
     }
     const props = withDefaults(defineProps<Props>(), {
         min: 0,
         max: 6,
-        step: 1
+        step: 1,
+        showLabels: true,
     });
     const emit = defineEmits<{ (e: 'update:modelValue', v: number): void }>();
+
+    const showLabels = computed(() => props.showLabels);
 
     const inner = computed({
         get: () => props.modelValue,

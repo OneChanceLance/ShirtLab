@@ -42,6 +42,7 @@
   .menu-button.active {
     background-color: rgb(255, 255, 255);
     color: rgb(75, 85, 93);
+
     span {
       font-weight: 600;
     }
@@ -66,6 +67,7 @@
     text-transform: none;
     font-family: 'Anek Latin', sans-serif;
     line-height: normal;
+    text-transform: uppercase;
     margin-bottom: -0.25rem;
   }
 
