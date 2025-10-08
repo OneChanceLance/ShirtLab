@@ -15,7 +15,7 @@ export interface ClothingCategory {
 
 export interface Subcategory {
   code: string;
-  category_code: string;
+  category: string;
   name: string;
 }
 
@@ -26,8 +26,8 @@ export interface Gender {
 
 export interface ClothingItem {
   id: number;
-  category_code: string;
-  subcategory_code: string;
+  category: string;
+  subcategory: string;
   gender: string;
   brand: string;
   name: string;
@@ -113,14 +113,14 @@ export async function getClothingMetaById(id: number) {
     .from('clothing')
     .select(`
       id,
-      category_code,
-      subcategory_code,
+      category,
+      subcategory,
       gender,
-      categories:category_code (
+      categories:category (
         code, name, category
       ),
-      subcategories:subcategory_code (
-        code, name, category_code
+      subcategories:subcategory (
+        code, name, category
       ),
       genders:gender (
         code, label
