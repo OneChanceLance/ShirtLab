@@ -151,6 +151,18 @@ export interface ClothesRow {
   print_y?: number | null;
   print_w?: number | null;
   print_h?: number | null;
+  grid_width_inches?: number | null;
+  grid_width_in?: number | null;
+  print_width_in?: number | null;
+  print_width_inches?: number | null;
+  grid_height_inches?: number | null;
+  grid_height_in?: number | null;
+  print_height_in?: number | null;
+  print_height_inches?: number | null;
+  grid_dpi?: number | null;
+  print_dpi?: number | null;
+  grid_ppi?: number | null;
+  print_ppi?: number | null;
   // background transform
   bg_offset_x?: number | null;
   bg_offset_y?: number | null;
@@ -182,10 +194,10 @@ export async function getClothesByAnyCode(code: string): Promise<ClothesRow | nu
   const candidates = ['code', 'sku', 'short_code', 'slug', 'name'];
   for (const col of candidates) {
     try {
-      const { data, error } = await supabase
-        .from('clothing')
+      const { data, error } = await (supabase
+        .from('clothing') as any)
         .select('*')
-        .eq(col as any, code)
+        .eq(col, code)
         .limit(1)
         .maybeSingle();
       if (error) throw error;
@@ -227,8 +239,8 @@ export async function getClothingItemByAnyCode(code: string): Promise<ClothingIt
   const candidates = ['code', 'sku', 'short_code', 'slug', 'name'];
   for (const col of candidates) {
     try {
-      const { data, error } = await supabase
-        .from('clothing_items')
+      const { data, error } = await (supabase
+        .from('clothing_items') as any)
         .select('*')
         .eq(col as any, code)
         .limit(1)

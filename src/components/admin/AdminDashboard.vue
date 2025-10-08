@@ -193,7 +193,7 @@
       const { data, error } = await supabase
         .from('clothing_items')
         .select('*')
-        .order('updated_at', { ascending: false, nullsLast: false })
+        .order('updated_at', { ascending: false })
         .limit(200);
 
       if (error) throw error;
@@ -258,10 +258,10 @@
       auto: true,
     };
 
-    const detectedBrand = (raw?.Product?.productBrand)
-      || (ssactivewearBrand.value && ssactivewearBrand.value.trim())
-      || (selectedBrand.value && selectedBrand.value.trim())
-      || null;
+    const rawProduct = (raw as Record<string, any> | undefined)?.Product;
+    const detectedBrand = (rawProduct as Record<string, any> | undefined)?.productBrand
+      ?? product?.brand
+      ?? null;
 
     const frontCandidate = defaultColor?.frontUrl ?? defaultColor?.front ?? null;
     const backCandidate = defaultColor?.backUrl ?? defaultColor?.back ?? null;
@@ -616,7 +616,7 @@
     font-size: 0.85rem;
   }
 
-  .items-table .actions button + button {
+  .items-table .actions button+button {
     margin-left: 0.5rem;
   }
 
