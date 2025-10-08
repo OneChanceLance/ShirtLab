@@ -76,6 +76,7 @@ serve(async (req) => {
         ...color,
         media: [],
         frontUrl: null,
+        sideUrl: null,
         backUrl: null,
       };
 
@@ -88,9 +89,10 @@ serve(async (req) => {
 
       try {
         const preview = await fetchColorPreview(configurationId);
-        const { front: normalizedFront, back: normalizedBack } = extractFrontBackFromPreview(preview);
+        const { front: normalizedFront, side: normalizedSide, back: normalizedBack } = extractFrontBackFromPreview(preview);
 
         if (normalizedFront) enriched.frontUrl = normalizedFront;
+        if (normalizedSide) enriched.sideUrl = normalizedSide;
         if (normalizedBack) enriched.backUrl = normalizedBack;
 
         if (!enriched.backUrl && normalizedFront) {
@@ -112,6 +114,7 @@ serve(async (req) => {
           colorId: color.id,
           configurationId,
           frontUrl: enriched.frontUrl,
+          sideUrl: enriched.sideUrl,
           backUrl: enriched.backUrl,
         });
 
@@ -292,6 +295,7 @@ interface NormalizedColor {
   configurationIds: string[];
   media?: any[];
   frontUrl?: string | null;
+  sideUrl?: string | null;
   backUrl?: string | null;
   price?: number | null;
   currency?: string | null;
@@ -404,10 +408,12 @@ function enrichColorWithMedia(color: NormalizedColor, mediaResponse: any): Norma
 
   let front: string | null = null;
   let back: string | null = null;
+  let side: string | null = null;
 
   if (swatchId) {
     // Use swatch id directly for CDN URLs
     front = `${CDN_COLOR_BASE}/${swatchId}_f_fl.jpg`;
+    side = `${CDN_COLOR_BASE}/${swatchId}_d_fl.jpg`;
     back = `${CDN_COLOR_BASE}/${swatchId}_b_fl.jpg`;
   } else {
     // Fallback to existing logic with extractColorCodeFromMedia
@@ -425,21 +431,31 @@ function enrichColorWithMedia(color: NormalizedColor, mediaResponse: any): Norma
       ?? pool.find((item) => item.url && item.url !== front)?.url
       ?? null;
 
+    side =
+      pool.find((item) => /side|profile|left|right/i.test(item.classType ?? item.location ?? item.description ?? ''))?.url
+      ?? pool.find((item) => /_(sd|d|s)_/i.test(item.url) && item.url !== front && item.url !== back)?.url
+      ?? null;
+
     // Only call extractColorCodeFromMedia if swatchId was not found
     const colorCode = extractColorCodeFromMedia(mediaArray, colorNameLower) ?? extractColorCodeFromMedia(pool, colorNameLower);
     if (colorCode) {
       front = `${CDN_COLOR_BASE}/${colorCode}_f_fl.jpg`;
+      if (!side) side = `${CDN_COLOR_BASE}/${colorCode}_d_fl.jpg`;
       if (!back) back = `${CDN_COLOR_BASE}/${colorCode}_b_fl.jpg`;
     } else {
       if (!front && pool.length) front = pool[0]?.url ?? null;
       if (!back && pool.length) back = pool.find((item) => item.url && item.url !== front)?.url ?? pool[0]?.url ?? null;
     }
   }
+  if (!side) {
+    side = deriveSideUrl(front) ?? deriveSideUrl(back);
+  }
 
   return {
     ...color,
     media: pool,
     frontUrl: front,
+    sideUrl: side,
     backUrl: back,
   };
 }
@@ -598,21 +614,98 @@ function normalizeImagePath(path?: string | null) {
   return `https://cdn.ssactivewear.com/${adjusted}`;
 }
 
+function deriveSideUrl(url: string | null): string | null {
+  if (!url) return null;
+  const replacements: Array<[RegExp, string]> = [
+    [/_f_/i, '_sd_'],
+    [/_f_/i, '_d_'],
+    [/front/i, 'side'],
+    [/Front/, 'Side'],
+    [/_b_/i, '_sd_'],
+    [/_b_/i, '_d_'],
+    [/back/i, 'side'],
+    [/Back/, 'Side'],
+  ];
+  for (const [pattern, replacement] of replacements) {
+    if (pattern.test(url)) {
+      const candidateUrl = url.replace(pattern, replacement);
+      if (candidateUrl !== url) return candidateUrl;
+    }
+  }
+  return null;
+}
+
 function extractFrontBackFromPreview(preview: any) {
-  if (!preview) return { front: null, back: null };
+  if (!preview) return { front: null, side: null, back: null };
 
   const payload = Array.isArray(preview) && preview.length === 1 ? preview[0] : preview;
   let candidate = payload;
 
-  if (payload?.colors && Array.isArray(payload.colors)) {
+  if (payload?.colors && Array.isArray(payload.colors) && payload.colors.length) {
     candidate = payload.colors[0];
   }
 
-  const frontPath = candidate?.colorFrontImage ?? candidate?.ColorFrontImage ?? candidate?.frontImage ?? candidate?.FrontImage ?? null;
-  const backPath = candidate?.colorBackImage ?? candidate?.ColorBackImage ?? candidate?.backImage ?? candidate?.BackImage ?? null;
-
-  return {
-    front: normalizeImagePath(frontPath),
-    back: normalizeImagePath(backPath),
+  const pickImage = (source: any, keys: string[]): string | null => {
+    for (const key of keys) {
+      const value = source?.[key];
+      if (typeof value === 'string' && value.trim()) return value;
+    }
+    return null;
   };
+
+  const searchNestedForSide = (node: any): string | null => {
+    const queue: any[] = Array.isArray(node) ? [...node] : [node];
+    const visited = new Set<any>();
+    const keyPattern = /(side|left|right)/i;
+    const urlPattern = /(_sd_|_d_|_s_|side)/i;
+
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current || typeof current !== 'object' || visited.has(current)) continue;
+      visited.add(current);
+
+      for (const [key, value] of Object.entries(current)) {
+        if (typeof value === 'string') {
+          if (keyPattern.test(key) || urlPattern.test(value)) {
+            if (value.trim()) return value;
+          }
+        } else if (value && typeof value === 'object') {
+          queue.push(value);
+        }
+      }
+    }
+    return null;
+  };
+
+  const frontPath = pickImage(candidate, ['colorFrontImage', 'ColorFrontImage', 'frontImage', 'FrontImage']);
+  const backPath = pickImage(candidate, ['colorBackImage', 'ColorBackImage', 'backImage', 'BackImage']);
+  const sidePath =
+    pickImage(candidate, [
+      'colorSideImage',
+      'ColorSideImage',
+      'sideImage',
+      'SideImage',
+      'colorLeftImage',
+      'ColorLeftImage',
+      'leftImage',
+      'LeftImage',
+      'colorRightImage',
+      'ColorRightImage',
+      'rightImage',
+      'RightImage',
+    ]) ?? searchNestedForSide(candidate);
+
+  const front = normalizeImagePath(frontPath);
+  const back = normalizeImagePath(backPath);
+  let side = normalizeImagePath(sidePath);
+
+  if (!side) {
+    side =
+      normalizeImagePath(deriveSideUrl(frontPath)) ??
+      normalizeImagePath(deriveSideUrl(backPath)) ??
+      deriveSideUrl(front) ??
+      deriveSideUrl(back);
+  }
+
+  return { front, side, back };
 }

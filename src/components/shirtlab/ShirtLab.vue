@@ -298,11 +298,16 @@
     return candidate !== null && candidate !== undefined ? String(candidate) : '';
   }
 
-  function resolveColorImage(color: Record<string, any> | undefined, side: 'front' | 'back') {
+  function resolveColorImage(color: Record<string, any> | undefined, side: 'front' | 'back' | 'side') {
     if (!color || typeof color !== 'object') return null;
-    const keys = side === 'front'
-      ? ['frontUrl', 'frontURL', 'frontImage', 'front', 'imageUrl', 'url']
-      : ['backUrl', 'backURL', 'backImage', 'back', 'imageUrl'];
+    let keys: string[];
+    if (side === 'front') {
+      keys = ['frontUrl', 'frontURL', 'frontImage', 'front', 'imageUrl', 'url'];
+    } else if (side === 'back') {
+      keys = ['backUrl', 'backURL', 'backImage', 'back', 'imageUrl'];
+    } else {
+      keys = ['sideUrl', 'sideURL', 'sideImage', 'side', 'sleeveUrl', 'sleeve', 'imageUrl'];
+    }
     for (const key of keys) {
       const value = color[key];
       if (typeof value === 'string' && value.trim()) return value;
@@ -320,8 +325,11 @@
     if (front) return front;
     const back = resolveColorImage(choice, 'back');
     if (back) return back;
+    const side = resolveColorImage(choice, 'side');
+    if (side) return side;
     if (typeof backgrounds.front === 'string' && backgrounds.front.trim()) return backgrounds.front;
     if (typeof backgrounds.back === 'string' && backgrounds.back.trim()) return backgrounds.back;
+    if (typeof backgrounds.side === 'string' && backgrounds.side.trim()) return backgrounds.side;
     const fallbacks = [(item as any)?.frontUrl, (item as any)?.frontImage, (item as any)?.imageUrl];
     for (const candidate of fallbacks) {
       if (typeof candidate === 'string' && candidate.trim()) return candidate;
@@ -590,6 +598,11 @@
       || (typeof backgrounds.back === 'string' && backgrounds.back.trim() ? backgrounds.back : undefined)
       || previewImage
       || front;
+    const sideCandidate = resolveColorImage(chosenColor, 'side');
+    const side = sideCandidate
+      || (typeof backgrounds.side === 'string' && backgrounds.side.trim() ? backgrounds.side : undefined)
+      || previewImage
+      || front;
 
     const payload: Record<string, any> = {
       name: item.name,
@@ -597,6 +610,7 @@
       colors,
       front,
       back,
+      side,
     };
 
     payload.sizeMeasurements = sizeMeasurements;
@@ -660,6 +674,7 @@
           shirtPlacerRef.value?.updateClothing({
             front: p.front,
             back: p.back,
+            side: p.side,
             grid: p.grid,
             bgTransform: p.bgTransform,
           });
@@ -671,6 +686,7 @@
           shirtPlacerRef.value?.setClothingImages({
             front: p.front,
             back: p.back,
+            side: p.side,
           });
           ok = true;
           break;
@@ -773,12 +789,16 @@
           c.frontUrl || c.frontURL || c.frontImage || c.front || c.imageUrl || undefined;
         const back: string | undefined =
           c.backUrl || c.backURL || c.backImage || c.back || c.imageUrl || undefined;
+        const side: string | undefined =
+          c.sideUrl || c.sideURL || c.sideImage || c.side || c.sleeveUrl || c.sleeve || undefined;
 
         const bgs: any = (item as any).backgrounds || {};
         const rootFront = (item as any).frontUrl || (item as any).frontImage || (item as any).imageUrl;
         const rootBack = (item as any).backUrl || (item as any).backImage || (item as any).imageUrl;
+        const rootSide = (item as any).sideUrl || (item as any).sideImage || (item as any).side;
         const useFront = front ?? bgs.front ?? rootFront;
         const useBack = back ?? bgs.back ?? rootBack;
+        const useSide = side ?? bgs.side ?? rootSide ?? useFront;
 
         const bgT: any = c.bgTransform || gridJson.bgTransform || {};
         const bgTransform = {
@@ -790,6 +810,7 @@
         shirtPlacerRef.value?.updateClothing({
           front: useFront,
           back: useBack,
+          side: useSide,
           grid,
           bgTransform,
           size: initialSize ?? null,
@@ -856,6 +877,8 @@
       setSelectedProductSize(legacyInitialSize);
       const useFront = selectedColor?.frontUrl || selectedColor?.front || baseFront;
       const useBack = selectedColor?.backUrl || selectedColor?.back || baseBack || useFront;
+      const useSide =
+        selectedColor?.sideUrl || selectedColor?.side || (row as any)?.sideUrl || (row as any)?.side || useFront;
       const colorBgTransform = selectedColor?.bgTransform;
       const bgTransform = colorBgTransform
         ? {
@@ -871,6 +894,7 @@
       shirtPlacerRef.value?.updateClothing({
         front: useFront,
         back: useBack,
+        side: useSide,
         grid,
         bgTransform,
         size: legacyInitialSize,
@@ -894,6 +918,7 @@
   function applyExternalClothing(payload: {
     front?: string;
     back?: string;
+    side?: string;
     grid?: any;
     colors?: any[];
     bgTransform?: any;
@@ -907,6 +932,7 @@
     if (payload.colors) details.colors = payload.colors;
     if (payload.front) details.front = payload.front;
     if (payload.back) details.back = payload.back;
+    if (payload.side) details.side = payload.side;
     const transform = payload.bgTransform ?? payload.colors?.[0]?.bgTransform;
     if (transform) details.bgTransform = transform;
 
@@ -937,9 +963,9 @@
     window.addEventListener('message', handleExternalMessage);
     // Optional direct API for same-origin host pages
     (window as any).ShirtLab = {
-      setClothing: (details: { front?: string; back?: string; grid?: { x: number; y: number; w: number; h: number }; bgTransform?: { offsetX?: number; offsetY?: number; scale?: number } }) =>
+      setClothing: (details: { front?: string; back?: string; side?: string; grid?: { x: number; y: number; w: number; h: number }; bgTransform?: { offsetX?: number; offsetY?: number; scale?: number } }) =>
         shirtPlacerRef.value?.updateClothing(details),
-      setImages: (imgs: { front?: string; back?: string }) =>
+      setImages: (imgs: { front?: string; back?: string; side?: string }) =>
         shirtPlacerRef.value?.setClothingImages(imgs),
       setGrid: (grid: { x: number; y: number; w: number; h: number }) =>
         shirtPlacerRef.value?.updateClothing({ grid }),
@@ -997,7 +1023,7 @@
   function sendSelectedBack() {
     shirtPlacerRef.value?.sendSelectedBack?.();
   }
-  function setClothingImages(imgs: { front?: string; back?: string }) {
+  function setClothingImages(imgs: { front?: string; back?: string; side?: string }) {
     shirtPlacerRef.value?.setClothingImages(imgs);
   }
 

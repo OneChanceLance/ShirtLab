@@ -207,7 +207,7 @@ export interface ClothingItemRow {
   brand?: string | null;
   grid?: any | null;        // { x,y,w,h, bgTransform? }
   colors?: any | null;      // e.g. [{ name, frontUrl?/frontURL?/frontImage?/front?, backUrl?/backURL?/backImage?/back?, imageUrl?, bgTransform? }]
-  backgrounds?: any | null; // { front?: string, back?: string }
+  backgrounds?: any | null; // { front?: string, side?: string, back?: string }
   sizes?: any | null;
   genders?: any | null;
 }

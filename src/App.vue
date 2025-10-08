@@ -47,7 +47,7 @@
     duplicateSelectedText(): void;
     bringSelectedForward(): void;
     sendSelectedBack(): void;
-    setClothingImages(imgs: { front?: string; back?: string }): void;
+    setClothingImages(imgs: { front?: string; back?: string; side?: string }): void;
     setBackgroundTransform(transform: { offsetX?: number; offsetY?: number; scale?: number }): void;
   };
 
@@ -177,6 +177,7 @@
     shirtLabRef.value.applyExternalClothing({
       front: imagery.front,
       back: imagery.back,
+      side: imagery.side,
       grid: imagery.grid,
       colors: imagery.colors,
       bgTransform: imagery.bgTransform,
@@ -230,6 +231,22 @@
     return (candidates.find((url) => typeof url === 'string' && url.length > 0) as string | undefined) || null;
   }
 
+  function resolveSideUrl(color: any, fallbackFront?: string | null, fallbackBack?: string | null): string | null {
+    if (!color) return fallbackFront ?? fallbackBack ?? null;
+    const media = Array.isArray(color.media) ? color.media : [];
+    const candidates = [
+      color.sideUrl,
+      color.sideURL,
+      color.side,
+      color.sleeveUrl,
+      resolveMediaMatch(media, /side|profile|left|right/i, fallbackFront ?? fallbackBack ?? undefined),
+      media.find((item: any) => typeof item?.url === 'string' && /_(sd|d|s)_/i.test(item.url))?.url,
+      fallbackFront,
+      fallbackBack,
+    ];
+    return (candidates.find((url) => typeof url === 'string' && url.length > 0) as string | undefined) || null;
+  }
+
   function applySelectedColorToShirtLab() {
     const lab = shirtLabRef.value;
     if (!lab) return;
@@ -242,13 +259,15 @@
 
     const front = resolveFrontUrl(color);
     const back = resolveBackUrl(color, front);
-    const key = `${color.id ?? idx}|${front ?? ''}|${back ?? ''}`;
+    const side = resolveSideUrl(color, front, back);
+    const key = `${color.id ?? idx}|${front ?? ''}|${back ?? ''}|${side ?? ''}`;
     if (lastAppliedColorKey.value === key) return;
 
-    const imagery: { front?: string; back?: string } = {};
+    const imagery: { front?: string; back?: string; side?: string } = {};
     if (front) imagery.front = front;
     if (back) imagery.back = back;
-    if (front || back) {
+    if (side) imagery.side = side;
+    if (front || back || side) {
       lab.setClothingImages?.(imagery);
     }
 
@@ -318,6 +337,7 @@
 
     const front = primaryColor?.frontUrl || primaryColor?.front || primaryColor?.imageUrl || backgrounds.front || null;
     const back = primaryColor?.backUrl || primaryColor?.back || primaryColor?.imageUrl || backgrounds.back || null;
+    const side = primaryColor?.sideUrl || primaryColor?.side || backgrounds.side || null;
     const bgTransform = primaryColor?.bgTransform || record?.bgTransform || backgrounds?.bgTransform || record?.grid?.bgTransform || null;
 
     const grid = normalizeGrid(record?.grid);
@@ -327,6 +347,7 @@
       colors,
       front: front ?? undefined,
       back: back ?? undefined,
+      side: side ?? undefined,
       bgTransform: bgTransform ?? undefined,
     });
   }

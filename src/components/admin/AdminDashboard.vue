@@ -57,10 +57,16 @@
               <td>{{ formatTimestamp(item.updated_at || item.created_at) }}</td>
               <td class="actions">
                 <button type="button" @click="applyClothing(item)">Apply</button>
+                <button type="button" class="secondary" @click="updateClothing(item)"
+                  :disabled="updatingId === clothingRowKey(item) || !resolveIdentifier(item) || importing">
+                  {{ updatingId === clothingRowKey(item) ? 'Updating…' : 'Update' }}
+                </button>
               </td>
             </tr>
           </tbody>
         </table>
+        <p v-if="updateError" class="status error status--compact">{{ updateError }}</p>
+        <p v-else-if="updateSuccess" class="status success status--compact">{{ updateSuccess }}</p>
       </section>
     </div>
   </div>
@@ -75,6 +81,8 @@
     id?: string;
     code?: string | null;
     sku?: string | null;
+    slug?: string | null;
+    short_code?: string | null;
     name?: string | null;
     brand?: string | null;
     colors?: any;
@@ -94,6 +102,9 @@
   const importing = ref(false);
   const importError = ref('');
   const importSuccess = ref('');
+  const updatingId = ref<string | null>(null);
+  const updateError = ref('');
+  const updateSuccess = ref('');
 
   const items = ref<ClothingRecord[]>([]);
   const listLoading = ref(false);
@@ -113,6 +124,48 @@
 
   function isMissingRelation(err: any) {
     return err?.code === '42P01';
+  }
+
+  function deriveSideUrl(url?: string | null): string | null {
+    if (!url) return null;
+    const replacements: Array<[RegExp, string]> = [
+      [/_f_/i, '_d_'],
+      [/_f_/i, '_sd_'],
+      [/front/gi, 'side'],
+      [/back/gi, 'side'],
+      [/_b_/i, '_d_'],
+      [/_b_/i, '_sd_'],
+    ];
+    for (const [pattern, replacement] of replacements) {
+      if (pattern.test(url)) {
+        const candidate = url.replace(pattern, replacement);
+        if (candidate !== url) return candidate;
+      }
+    }
+    return null;
+  }
+
+  function resolveSideFromColor(color: any, front?: string | null, back?: string | null): string | null {
+    if (!color || typeof color !== 'object') {
+      return deriveSideUrl(front) ?? deriveSideUrl(back);
+    }
+    const media = Array.isArray(color.media) ? color.media : [];
+    const candidates: Array<string | null | undefined> = [
+      color.sideUrl,
+      color.sideURL,
+      color.sideImage,
+      color.side,
+      color.sleeveUrl,
+      color.sleeve,
+      media.find((item: any) =>
+        /side|profile|left|right/i.test(item?.classType ?? item?.location ?? item?.description ?? '')
+      )?.url,
+      media.find((item: any) => typeof item?.url === 'string' && /_(sd|d|s)_/i.test(item.url))?.url,
+      deriveSideUrl(front),
+      deriveSideUrl(back),
+    ];
+    const picked = candidates.find((value) => typeof value === 'string' && value.trim());
+    return picked ? String(picked) : null;
   }
 
   onMounted(() => {
@@ -158,6 +211,129 @@
     }
   }
 
+  async function upsertClothingFromPromo(code: string): Promise<ClothingRecord> {
+    const endpoint = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/promostandards-product`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ productId: code }),
+    });
+
+    if (!res.ok) {
+      const details = await res.json().catch(() => ({}));
+      throw new Error(details.error || 'Failed to fetch style from PromoStandards.');
+    }
+
+    const payload = await res.json();
+    const raw = payload?.raw;
+    const product = payload?.product;
+    if (!product || !Array.isArray(product.colors) || product.colors.length === 0) {
+      throw new Error('No colors returned for that style.');
+    }
+
+    const normalizedColors = (product.colors ?? []).map((color: any) => {
+      if (!color || typeof color !== 'object') return color;
+      const front = color.frontUrl ?? color.front ?? null;
+      const back = color.backUrl ?? color.back ?? null;
+      const side = resolveSideFromColor(color, front, back);
+      if (side && !color.sideUrl) {
+        return { ...color, sideUrl: side };
+      }
+      return color;
+    });
+    product.colors = normalizedColors as any;
+
+    const defaultColor = product.colors.find((c: any) => c.id === product.defaultColorId) || product.colors[0];
+    const sizeMeasurements = extractSizeMeasurementsFromPromo(raw?.Product);
+    const grid = {
+      x: 175,
+      y: 150,
+      w: 250,
+      h: 400,
+      widthInches: 12,
+      heightInches: 18,
+      auto: true,
+    };
+
+    const detectedBrand = (raw?.Product?.productBrand)
+      || (ssactivewearBrand.value && ssactivewearBrand.value.trim())
+      || (selectedBrand.value && selectedBrand.value.trim())
+      || null;
+
+    const frontCandidate = defaultColor?.frontUrl ?? defaultColor?.front ?? null;
+    const backCandidate = defaultColor?.backUrl ?? defaultColor?.back ?? null;
+    const resolvedSide = resolveSideFromColor(defaultColor, frontCandidate, backCandidate);
+
+    const record: ClothingRecord = {
+      code,
+      name: product.name ?? code,
+      brand: detectedBrand,
+      colors: product.colors,
+      grid,
+      backgrounds: {
+        front: defaultColor?.frontUrl ?? null,
+        side: resolvedSide ?? null,
+        back: defaultColor?.backUrl ?? null,
+      },
+      default_color_id: product.defaultColorId ?? null,
+      updated_at: new Date().toISOString(),
+    };
+    if (resolvedSide && defaultColor && !defaultColor.sideUrl) {
+      defaultColor.sideUrl = resolvedSide;
+    }
+
+    if (sizeMeasurements.length) {
+      (record as any).size_measurements = sizeMeasurements;
+    }
+
+    try {
+      const existingId = await lookupExistingClothingId(code);
+      if (existingId) record.id = existingId;
+    } catch (lookupError: any) {
+      if (isMissingRelation(lookupError)) {
+        throw Object.assign(new Error(MISSING_TABLE_MESSAGE), { code: lookupError.code });
+      }
+      throw lookupError;
+    }
+
+    let attempt = { ...record } as ClothingRecord;
+    const pruned = new Set<string>();
+
+    while (true) {
+      const { error: upsertError } = await supabase.from('clothing_items').upsert(attempt);
+      if (!upsertError) break;
+      if (isMissingRelation(upsertError)) {
+        throw Object.assign(new Error(MISSING_TABLE_MESSAGE), { code: upsertError.code });
+      }
+      if (upsertError.code !== '42703') throw upsertError;
+      const missing = extractMissingColumn(upsertError.message);
+      if (!missing || pruned.has(missing)) throw upsertError;
+      pruned.add(missing);
+      delete attempt[missing];
+    }
+
+    return record;
+  }
+
+  function resolveIdentifier(item: ClothingRecord): string {
+    const candidates = [item.code, item.sku, item.slug, item.short_code, item.name];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+    return '';
+  }
+
+  function clothingRowKey(item: ClothingRecord): string {
+    const identifier = resolveIdentifier(item);
+    if (typeof item.id === 'string' && item.id.trim()) return item.id;
+    return identifier;
+  }
+
   async function handleImport() {
     const code = styleInput.value.trim();
     if (!code) {
@@ -168,92 +344,12 @@
     importing.value = true;
     importError.value = '';
     importSuccess.value = '';
+    updateError.value = '';
+    updateSuccess.value = '';
 
     try {
-      const endpoint = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/promostandards-product`;
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({ productId: code }),
-      });
-
-      if (!res.ok) {
-        const details = await res.json().catch(() => ({}));
-        throw new Error(details.error || 'Failed to fetch style from PromoStandards.');
-      }
-
-      const payload = await res.json();
-      const raw = payload?.raw
-      const product = payload?.product;
-      if (!product || !Array.isArray(product.colors) || product.colors.length === 0) {
-        throw new Error('No colors returned for that style.');
-      }
-
-      const defaultColor = product.colors.find((c: any) => c.id === product.defaultColorId) || product.colors[0];
-      const sizeMeasurements = extractSizeMeasurementsFromPromo(raw?.Product);
-      const grid = {
-        x: 175,
-        y: 150,
-        w: 250,
-        h: 400,
-        widthInches: 12,
-        heightInches: 18,
-        auto: true,
-      };
-
-      const detectedBrand = (raw.Product?.productBrand)
-        || (ssactivewearBrand.value && ssactivewearBrand.value.trim())
-        || (selectedBrand.value && selectedBrand.value.trim())
-        || null;
-
-      const record: ClothingRecord = {
-        code,
-        name: product.name ?? code,
-        brand: detectedBrand,
-        colors: product.colors,
-        grid,
-        backgrounds: {
-          front: defaultColor?.frontUrl ?? null,
-          back: defaultColor?.backUrl ?? null,
-        },
-        default_color_id: product.defaultColorId ?? null,
-        updated_at: new Date().toISOString(),
-      };
-
-      if (sizeMeasurements.length) {
-        (record as any).size_measurements = sizeMeasurements;
-      }
-
-      try {
-        const existingId = await lookupExistingClothingId(code);
-        if (existingId) record.id = existingId;
-      } catch (lookupError: any) {
-        if (isMissingRelation(lookupError)) {
-          throw Object.assign(new Error(MISSING_TABLE_MESSAGE), { code: lookupError.code });
-        }
-        throw lookupError;
-      }
-
-      let attempt = { ...record } as ClothingRecord;
-      const pruned = new Set<string>();
-
-      while (true) {
-        const { error: upsertError } = await supabase.from('clothing_items').upsert(attempt);
-        if (!upsertError) break;
-        if (isMissingRelation(upsertError)) {
-          throw Object.assign(new Error(MISSING_TABLE_MESSAGE), { code: upsertError.code });
-        }
-        if (upsertError.code !== '42703') throw upsertError;
-        const missing = extractMissingColumn(upsertError.message);
-        if (!missing || pruned.has(missing)) throw upsertError;
-        pruned.add(missing);
-        delete attempt[missing];
-      }
-
-      importSuccess.value = `Stored ${record.name} (${code}).`;
+      const record = await upsertClothingFromPromo(code);
+      importSuccess.value = `Stored ${record.name ?? code} (${code}).`;
       styleInput.value = '';
       await refreshList();
     } catch (err: any) {
@@ -261,6 +357,31 @@
       importError.value = err?.message || 'Unable to import clothing item.';
     } finally {
       importing.value = false;
+    }
+  }
+
+  async function updateClothing(item: ClothingRecord) {
+    updateError.value = '';
+    updateSuccess.value = '';
+
+    const identifier = resolveIdentifier(item);
+    if (!identifier) {
+      updateError.value = 'Unable to update this style because it is missing a code or SKU.';
+      return;
+    }
+
+    const rowKey = clothingRowKey(item);
+    updatingId.value = rowKey || identifier;
+
+    try {
+      const record = await upsertClothingFromPromo(identifier);
+      updateSuccess.value = `Updated ${record.name ?? identifier}.`;
+      await refreshList();
+    } catch (err: any) {
+      console.error('[AdminDashboard] Update failed', err);
+      updateError.value = err?.message || 'Unable to update clothing item.';
+    } finally {
+      updatingId.value = null;
     }
   }
 
@@ -427,6 +548,17 @@
     box-shadow: none;
   }
 
+  button.secondary {
+    background: transparent;
+    color: #0f172a;
+    border: 1px solid rgba(148, 201, 64, 0.55);
+  }
+
+  button.secondary:hover {
+    background: rgba(148, 201, 64, 0.12);
+    box-shadow: none;
+  }
+
   .status {
     font-size: 0.9rem;
     color: #1f2937;
@@ -482,6 +614,14 @@
   .items-table .actions button {
     padding: 0.4rem 0.85rem;
     font-size: 0.85rem;
+  }
+
+  .items-table .actions button + button {
+    margin-left: 0.5rem;
+  }
+
+  .status--compact {
+    margin-top: 0.5rem;
   }
 
   @media (max-width: 768px) {
