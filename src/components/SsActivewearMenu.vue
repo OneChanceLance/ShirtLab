@@ -254,7 +254,8 @@
         throw new Error('This style did not return any colors.');
       }
 
-      sizeMeasurements.value = extractSizeMeasurementsFromPromo(data.raw?.Product);
+      const rawProduct = (data.raw as Record<string, any> | undefined)?.Product;
+      sizeMeasurements.value = extractSizeMeasurementsFromPromo(rawProduct);
       product.value = {
         ...data.product,
         sizeMeasurements: sizeMeasurements.value,
@@ -293,7 +294,7 @@
 
   function findMedia(color: PromoColor | null, keyword: RegExp): string | undefined {
     if (!color?.media?.length) return undefined;
-    const match = color.media.find((item) => keyword.test(item.classType ?? item.location ?? item.description ?? ''));
+    const match = color.media.find((item: PromoMedia) => keyword.test(item.classType ?? item.location ?? item.description ?? ''));
     return match?.url ?? undefined;
   }
 
@@ -303,7 +304,10 @@
     if (!color) return;
 
     const front = previewFront.value || color.frontUrl || findMedia(color, /front|primary/i) || color.media?.[0]?.url;
-    const back = previewBack.value || color.backUrl || findMedia(color, /back|rear/i) || color.media?.find((item) => item.url !== front)?.url;
+    const back = previewBack.value
+      || color.backUrl
+      || findMedia(color, /back|rear/i)
+      || color.media?.find((item: PromoMedia) => item.url !== front)?.url;
     const side = color.sideUrl || findMedia(color, /side|profile|left|right/i) || (front ? front.replace('_f_', '_d_') : undefined);
 
     const emitColor = {
