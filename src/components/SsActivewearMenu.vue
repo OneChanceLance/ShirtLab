@@ -82,6 +82,7 @@
     media?: PromoMedia[];
     frontUrl?: string | null;
     backUrl?: string | null;
+    sideUrl?: string | null;
     price?: number | null;
     currency?: string | null;
     quantityMin?: number | null;
@@ -109,6 +110,7 @@
       imagery: {
         front?: string;
         back?: string;
+        side?: string;
         colors?: Array<Record<string, unknown>>;
         grid?: any;
         bgTransform?: any;
@@ -302,6 +304,7 @@
 
     const front = previewFront.value || color.frontUrl || findMedia(color, /front|primary/i) || color.media?.[0]?.url;
     const back = previewBack.value || color.backUrl || findMedia(color, /back|rear/i) || color.media?.find((item) => item.url !== front)?.url;
+    const side = color.sideUrl || findMedia(color, /side|profile|left|right/i) || (front ? front.replace('_f_', '_d_') : undefined);
 
     const emitColor = {
       name: color.name,
@@ -310,6 +313,7 @@
       background: color.hex ?? '',
       frontUrl: front,
       backUrl: back,
+      sideUrl: side,
       media: color.media ?? [],
       price: color.price ?? null,
       currency: color.currency ?? null,
@@ -323,6 +327,7 @@
       imagery: {
         front,
         back,
+        side,
         colors: [emitColor],
         grid: (color as any)?.grid ?? null,
         bgTransform: (color as any)?.bgTransform ?? null,
