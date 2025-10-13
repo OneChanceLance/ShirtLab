@@ -2,7 +2,7 @@ import { reactive, ref } from 'vue';
 import type { SizeMeasurementEntry, SizeMeasurementSpec } from '../../../utils/sizeMeasurements';
 import { findMeasurementForSize, findSpecValueInInches, normalizeSizeLabel } from '../../../utils/sizeMeasurements';
 
-export type View = 'Front' | 'Back' | 'Sleeve';
+export type View = 'Front' | 'Back';
 
 export type DesignGrid = {
   x: number;

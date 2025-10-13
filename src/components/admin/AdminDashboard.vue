@@ -130,48 +130,6 @@
     return err?.code === '42P01';
   }
 
-  function deriveSideUrl(url?: string | null): string | null {
-    if (!url) return null;
-    const replacements: Array<[RegExp, string]> = [
-      [/_f_/i, '_d_'],
-      [/_f_/i, '_sd_'],
-      [/front/gi, 'side'],
-      [/back/gi, 'side'],
-      [/_b_/i, '_d_'],
-      [/_b_/i, '_sd_'],
-    ];
-    for (const [pattern, replacement] of replacements) {
-      if (pattern.test(url)) {
-        const candidate: string = url.replace(pattern, replacement);
-        if (candidate !== url) return candidate;
-      }
-    }
-    return null;
-  }
-
-  function resolveSideFromColor(color: any, front?: string | null, back?: string | null): string | null {
-    if (!color || typeof color !== 'object') {
-      return deriveSideUrl(front) ?? deriveSideUrl(back);
-    }
-    const media = Array.isArray(color.media) ? color.media : [];
-    const candidates: Array<string | null | undefined> = [
-      color.sideUrl,
-      color.sideURL,
-      color.sideImage,
-      color.side,
-      color.sleeveUrl,
-      color.sleeve,
-      media.find((item: any) =>
-        /side|profile|left|right/i.test(item?.classType ?? item?.location ?? item?.description ?? '')
-      )?.url,
-      media.find((item: any) => typeof item?.url === 'string' && /_(sd|d|s)_/i.test(item.url))?.url,
-      deriveSideUrl(front),
-      deriveSideUrl(back),
-    ];
-    const picked = candidates.find((value) => typeof value === 'string' && value.trim());
-    return picked ? String(picked) : null;
-  }
-
   interface CategoryGuess {
     category: string | null;
     subcategory: string | null;
@@ -369,6 +327,46 @@
     return { category, subcategory };
   }
 
+  const genderCodeCache = new Map<string, string>();
+  let genderCodesLoaded = false;
+
+  async function ensureGenderCodesLoaded() {
+    if (genderCodesLoaded) return;
+    try {
+      const { data, error } = await supabase.from('genders').select('code,name');
+      if (error) throw error;
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          const code = typeof entry?.code === 'string' ? entry.code.trim() : '';
+          const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
+          if (!code) continue;
+          const lowerCode = code.toLowerCase();
+          genderCodeCache.set(lowerCode, code);
+          if (name) {
+            genderCodeCache.set(name.toLowerCase(), code);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[AdminDashboard] Failed to load gender codes, falling back to defaults', err);
+    } finally {
+      genderCodesLoaded = true;
+    }
+  }
+
+  async function classifyGender(product: any, rawProduct: any): Promise<string> {
+    await ensureGenderCodesLoaded();
+    const productName = typeof product?.name === 'string' ? product.name : (typeof rawProduct?.productName === 'string' ? rawProduct.productName : '');
+    const text = productName.toLowerCase();
+    const target = text.includes('women') ? 'women' : 'unisex';
+    const preferredCodes = target === 'women' ? ['w', 'women', "women's"] : ['u', 'unisex'];
+    for (const key of preferredCodes) {
+      const code = genderCodeCache.get(key.toLowerCase());
+      if (code) return code;
+    }
+    return target === 'women' ? 'w' : 'u';
+  }
+
   onMounted(() => {
     refreshList();
   });
@@ -437,33 +435,38 @@
 
     const normalizedColors = (product.colors ?? []).map((color: any) => {
       if (!color || typeof color !== 'object') return color;
-      const front = color.frontUrl ?? color.front ?? null;
+      const front = color.frontUrl ?? color.front ?? color.imageUrl ?? color.url ?? null;
       const back = color.backUrl ?? color.back ?? null;
-      const side = resolveSideFromColor(color, front, back);
-      if (side && !color.sideUrl) {
-        return { ...color, sideUrl: side };
-      }
-      return color;
+      return {
+        ...color,
+        frontUrl: front ?? null,
+        backUrl: back ?? null,
+      };
     }).filter((color: any) => {
       if (!color || typeof color !== 'object') return false;
-      const frontCandidate =
-        color.frontUrl ?? color.frontURL ?? color.frontImage ?? color.front ?? color.imageUrl ?? color.url ?? null;
-      const backCandidate =
-        color.backUrl ?? color.backURL ?? color.backImage ?? color.back ?? null;
-      const sideCandidate =
-        color.sideUrl ?? color.sideURL ?? color.sideImage ?? color.side ?? color.sleeveUrl ?? color.sleeve ?? null;
+      const frontCandidate = color.frontUrl ?? color.frontURL ?? color.frontImage ?? color.front ?? color.imageUrl ?? color.url ?? null;
+      const backCandidate = color.backUrl ?? color.backURL ?? color.backImage ?? color.back ?? null;
       return (
         typeof frontCandidate === 'string' && frontCandidate.trim() &&
-        typeof backCandidate === 'string' && backCandidate.trim() &&
-        typeof sideCandidate === 'string' && sideCandidate.trim()
+        typeof backCandidate === 'string' && backCandidate.trim()
       );
     });
     if (!normalizedColors.length) {
-      throw new Error('No colors with complete front/side/back previews were returned for that style.');
+      throw new Error('No colors with complete front/back previews were returned for that style.');
     }
     product.colors = normalizedColors as any;
 
-    const defaultColor = product.colors.find((c: any) => c.id === product.defaultColorId) || product.colors[0];
+    let defaultColor = product.colors.find((c: any) => c.id === product.defaultColorId) || product.colors[0];
+    if (!defaultColor) {
+      throw new Error('No colors available after filtering.');
+    }
+    if (!defaultColor.frontUrl || !defaultColor.backUrl) {
+      const fallback = product.colors.find((c: any) => c.frontUrl && c.backUrl);
+      if (fallback) {
+        defaultColor = fallback;
+        product.defaultColorId = fallback.id;
+      }
+    }
     const sizeMeasurements = extractSizeMeasurementsFromPromo(raw?.Product);
     const grid = {
       x: 175,
@@ -482,7 +485,7 @@
 
     const frontCandidate = defaultColor?.frontUrl ?? defaultColor?.front ?? null;
     const backCandidate = defaultColor?.backUrl ?? defaultColor?.back ?? null;
-    const resolvedSide = resolveSideFromColor(defaultColor, frontCandidate, backCandidate);
+    const resolvedSide = null;
 
     const record: ClothingRecord = {
       code,
@@ -492,15 +495,13 @@
       grid,
       backgrounds: {
         front: defaultColor?.frontUrl ?? null,
-        side: resolvedSide ?? null,
+        side: resolvedSide,
         back: defaultColor?.backUrl ?? null,
       },
       default_color_id: product.defaultColorId ?? null,
       updated_at: new Date().toISOString(),
     };
-    if (resolvedSide && defaultColor && !defaultColor.sideUrl) {
-      defaultColor.sideUrl = resolvedSide;
-    }
+    // No side imagery required; backgrounds only use front/back.
 
     if (sizeMeasurements.length) {
       (record as any).size_measurements = sizeMeasurements;
@@ -512,6 +513,11 @@
     }
     if (classification.subcategory) {
       (record as any).subcategory = classification.subcategory;
+    }
+
+    const genderGuess = await classifyGender(product, rawProduct);
+    if (genderGuess) {
+      (record as any).gender = genderGuess;
     }
 
     try {
