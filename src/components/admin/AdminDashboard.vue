@@ -32,6 +32,9 @@
             <p class="hint" v-if="items.length">{{ items.length }} stored</p>
           </div>
           <input v-model="searchTerm" type="search" placeholder="Filter by code, name, or brand" />
+          <button type="button" class="secondary" @click="updateAllClothing" :disabled="updateAllBusy || !items.length">
+            {{ updateAllBusy ? 'Updating All…' : 'Update All' }}
+          </button>
         </div>
 
         <div v-if="listError" class="status error">{{ listError }}</div>
@@ -105,6 +108,7 @@
   const updatingId = ref<string | null>(null);
   const updateError = ref('');
   const updateSuccess = ref('');
+  const updateAllBusy = ref(false);
 
   const items = ref<ClothingRecord[]>([]);
   const listLoading = ref(false);
@@ -138,7 +142,7 @@
     ];
     for (const [pattern, replacement] of replacements) {
       if (pattern.test(url)) {
-        const candidate = url.replace(pattern, replacement);
+        const candidate: string = url.replace(pattern, replacement);
         if (candidate !== url) return candidate;
       }
     }
@@ -166,6 +170,203 @@
     ];
     const picked = candidates.find((value) => typeof value === 'string' && value.trim());
     return picked ? String(picked) : null;
+  }
+
+  interface CategoryGuess {
+    category: string | null;
+    subcategory: string | null;
+  }
+
+  function classifyProductCategory(product: any, rawProduct: any): CategoryGuess {
+    const segments = new Set<string>();
+
+    const collect = (value: unknown) => {
+      if (!value) return;
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) segments.add(trimmed);
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const entry of value) collect(entry);
+        return;
+      }
+      if (typeof value === 'object') {
+        const obj = value as Record<string, unknown>;
+        const keysOfInterest = [
+          'name',
+          'Name',
+          'description',
+          'Description',
+          'productName',
+          'ProductName',
+          'productType',
+          'ProductType',
+          'productCategory',
+          'ProductCategory',
+          'productSubCategory',
+          'ProductSubCategory',
+          'category',
+          'Category',
+          'label',
+          'Label',
+          'title',
+          'Title',
+          'keywords',
+          'Keywords',
+          'type',
+          'Type',
+          'group',
+          'Group',
+        ];
+        for (const key of keysOfInterest) {
+          if (Object.prototype.hasOwnProperty.call(obj, key)) {
+            collect(obj[key]);
+          }
+        }
+      }
+    };
+
+    collect(product?.name);
+    collect(product?.description);
+    collect((product as Record<string, any> | undefined)?.productType ?? (product as any)?.type ?? null);
+    collect((product as Record<string, any> | undefined)?.productCategory ?? (product as any)?.category ?? null);
+    collect((product as Record<string, any> | undefined)?.productSubCategory ?? null);
+    collect((rawProduct as Record<string, any> | undefined)?.ProductMarketing ?? (rawProduct as any)?.productMarketing);
+    collect(rawProduct?.Product ?? rawProduct?.product ?? rawProduct);
+    collect(rawProduct?.ProductCategoryArray ?? rawProduct?.productCategoryArray);
+    collect(rawProduct?.Classification ?? rawProduct?.classification);
+
+    const combined = Array.from(segments).join(' ').toLowerCase();
+    const normalized = combined.replace(/[^a-z0-9]+/g, ' ').trim();
+    if (!normalized) {
+      return { category: '1', subcategory: '1a' };
+    }
+
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    const tokenSet = new Set(tokens);
+    const padded = ` ${normalized} `;
+
+    const hasToken = (...candidates: string[]) => {
+      return candidates.some((candidate) => {
+        const base = candidate.toLowerCase();
+        return tokenSet.has(base)
+          || tokenSet.has(`${base}s`)
+          || tokenSet.has(`${base}es`)
+          || tokenSet.has(base.replace(/s$/, ''));
+      });
+    };
+
+    const hasPhrase = (...phraseTokens: string[]) => {
+      if (!phraseTokens.length) return false;
+      for (let i = 0; i <= tokens.length - phraseTokens.length; i += 1) {
+        let matches = true;
+        for (let j = 0; j < phraseTokens.length; j += 1) {
+          if (tokens[i + j] !== phraseTokens[j]) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) return true;
+      }
+      return false;
+    };
+
+    const matches = (...patterns: RegExp[]) => patterns.some((pattern) => pattern.test(padded));
+
+
+
+    let category: string = '1';
+    let subcategory: string | null = '1a';
+
+    const mentionsCrewneck = hasToken('crewneck') || hasPhrase('crew');
+    const mentionsFleece = hasToken('fleece');
+    const isSweatshirt = hasToken('sweatshirt');
+    const isSweater = hasToken('sweater');
+    const isHoodie = matches(/\bhood(ie|ed|s)?\b/) || hasToken('hoodie', 'hooded');
+    const isPullover = hasToken('pullover');
+    const isJacket = hasToken('jacket', 'anorak', 'parka', 'windbreaker', 'coat', 'shell');
+    const isOuterwear = hasToken('outerwear');
+    const mentionsQuarterZip = matches(/\bquarter zip\b/) || matches(/\b1 4 zip\b/) || matches(/\b1\/4 zip\b/);
+    const mentionsHalfZip = matches(/\bhalf zip\b/) || matches(/\b1 2 zip\b/) || matches(/\b1\/2 zip\b/);
+    const mentionsZip = matches(/\bzip(per|ped)?\b/) || hasToken('zipup', 'zipfront', 'zipper', 'zip') || matches(/\bzip-up\b/);
+    const isFleece =
+      isSweatshirt ||
+      mentionsFleece ||
+      isSweater ||
+      isHoodie ||
+      isPullover ||
+      isJacket ||
+      isOuterwear ||
+      ((mentionsQuarterZip || mentionsHalfZip || mentionsZip) && (isSweatshirt || isHoodie || isJacket || mentionsFleece)) ||
+      (mentionsCrewneck && (isSweatshirt || mentionsFleece));
+    if (isFleece) {
+      category = '2';
+      if (mentionsZip || mentionsQuarterZip || mentionsHalfZip) {
+        subcategory = '2c';
+      } else if (isHoodie) {
+        subcategory = '2b';
+      } else {
+        subcategory = '2a';
+      }
+      return { category, subcategory };
+    }
+
+    const resolveShirtCategory = () => {
+      const category = '1';
+      const isOnesie = hasToken('onesie', 'onesy', 'bodysuit', 'romper', 'infant', 'baby');
+      if (isOnesie) return { category, subcategory: '1d' };
+
+      const isPolo = hasToken('polo', 'golf') || hasPhrase('polo', 'golf');
+      if (isPolo) return { category, subcategory: '1c' };
+
+      const isLongSleeve = hasPhrase('long', 'sleeve') || hasToken('longsleeve', 'longsleeved', 'ls');
+      if (isLongSleeve) return { category, subcategory: '1b' };
+
+      const isShortSleeve = hasPhrase('short', 't-shirt', 'tee') || hasToken('shortsleeve', 'shortsleeved');
+      const mentionsTee = hasToken('tee', 'tshirt', 't-shirt', 'crewneck', 'jersey', 'vneck', 'v-neck')
+        || hasPhrase('t', 'shirt')
+        || hasPhrase('v', 'neck');
+      if (isShortSleeve || mentionsTee || hasToken('tank', 'tanktop', 'muscle')) {
+        return { category, subcategory: '1a' };
+      }
+
+      return null;
+    };
+
+    const shirtResult = resolveShirtCategory();
+    if (shirtResult) return shirtResult;
+
+    const bottomCandidates = [
+      'shorts',
+      'bottom',
+      'pant',
+      'trouser',
+      'legging',
+      'jogger',
+      'skort',
+      'capri',
+      'tight',
+      'sweatpant',
+      'chino',
+      'jean',
+      'denim',
+      'trackpant',
+    ];
+    const mentionsShorts = hasToken('shorts', 'boardshort', 'boardshorts', 'walkshort', 'bermuda');
+    const isPants = mentionsShorts || bottomCandidates.some((candidate) => hasToken(candidate));
+    if (isPants) {
+      category = '3';
+      subcategory = hasToken('jean', 'denim') ? '3a' : null;
+      return { category, subcategory };
+    }
+
+    const isHat = hasToken('hat', 'cap', 'beanie', 'visor', 'bucket', 'snapback', 'trucker', 'fedora', 'toque', 'headwear', 'headband', 'balaclava');
+    if (isHat || matches(/\bheadwear\b/)) {
+      return { category: '4', subcategory: null };
+    }
+
+    return { category, subcategory };
   }
 
   onMounted(() => {
@@ -243,7 +444,23 @@
         return { ...color, sideUrl: side };
       }
       return color;
+    }).filter((color: any) => {
+      if (!color || typeof color !== 'object') return false;
+      const frontCandidate =
+        color.frontUrl ?? color.frontURL ?? color.frontImage ?? color.front ?? color.imageUrl ?? color.url ?? null;
+      const backCandidate =
+        color.backUrl ?? color.backURL ?? color.backImage ?? color.back ?? null;
+      const sideCandidate =
+        color.sideUrl ?? color.sideURL ?? color.sideImage ?? color.side ?? color.sleeveUrl ?? color.sleeve ?? null;
+      return (
+        typeof frontCandidate === 'string' && frontCandidate.trim() &&
+        typeof backCandidate === 'string' && backCandidate.trim() &&
+        typeof sideCandidate === 'string' && sideCandidate.trim()
+      );
     });
+    if (!normalizedColors.length) {
+      throw new Error('No colors with complete front/side/back previews were returned for that style.');
+    }
     product.colors = normalizedColors as any;
 
     const defaultColor = product.colors.find((c: any) => c.id === product.defaultColorId) || product.colors[0];
@@ -287,6 +504,14 @@
 
     if (sizeMeasurements.length) {
       (record as any).size_measurements = sizeMeasurements;
+    }
+
+    const classification = classifyProductCategory(product, rawProduct);
+    if (classification.category) {
+      (record as any).category = classification.category;
+    }
+    if (classification.subcategory) {
+      (record as any).subcategory = classification.subcategory;
     }
 
     try {
@@ -382,6 +607,57 @@
       updateError.value = err?.message || 'Unable to update clothing item.';
     } finally {
       updatingId.value = null;
+    }
+  }
+
+  async function updateAllClothing() {
+    if (updateAllBusy.value || !items.value.length) return;
+    updateAllBusy.value = true;
+    updateError.value = '';
+    updateSuccess.value = '';
+
+    try {
+      const skipped: string[] = [];
+      const failures: Array<{ id: string; message: string }> = [];
+      let updatedCount = 0;
+
+      for (const item of items.value) {
+        const identifier = resolveIdentifier(item);
+        if (!identifier) continue;
+        try {
+          await upsertClothingFromPromo(identifier);
+          updatedCount += 1;
+        } catch (err: any) {
+          console.error('[AdminDashboard] Update-all failure for', identifier, err);
+          const message = String(err?.message ?? 'Unknown error');
+          if (
+            /No preview imagery available/i.test(message) ||
+            /No colors with complete front\/side\/back previews were returned/i.test(message)
+          ) {
+            skipped.push(identifier);
+            continue;
+          }
+          failures.push({ id: identifier, message });
+          continue;
+        }
+      }
+      if (updatedCount > 0) {
+        updateSuccess.value = `Updated ${updatedCount} style${updatedCount === 1 ? '' : 's'}${skipped.length ? ` (skipped ${skipped.length} with missing imagery)` : ''}.`;
+        await refreshList();
+      }
+      if (failures.length) {
+        const summary = failures
+          .slice(0, 5)
+          .map(({ id, message }) => `${id}: ${message}`)
+          .join('; ');
+        updateError.value = failures.length > 5
+          ? `Failed to update ${failures.length} styles. Sample: ${summary}`
+          : `Failed to update ${summary}`;
+      } else if (!updatedCount && skipped.length) {
+        updateError.value = `Skipped ${skipped.length} style${skipped.length === 1 ? '' : 's'} because preview imagery is missing.`;
+      }
+    } finally {
+      updateAllBusy.value = false;
     }
   }
 
