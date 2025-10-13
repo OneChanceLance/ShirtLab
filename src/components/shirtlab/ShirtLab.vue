@@ -319,7 +319,7 @@
     if (['women', 'woman', 'womens', 'female', 'lady', 'ladies', 'w', 'girls', 'girl', 'f'].includes(condensed)) return 'women';
     if (
       condensed.includes('unisex') ||
-      ['unisex', 'uni', 'unis', 'adult', 'all', 'both'].includes(condensed)
+      ['unisex', 'u', 'uni', 'unis', 'adult', 'all', 'both'].includes(condensed)
     ) {
       return 'unisex';
     }

@@ -37,8 +37,10 @@
 
     .viewport {
         background-color: rgb(75, 85, 93);
+        border: 3px solid rgb(75, 85, 93);
         border-radius: 0.5rem;
-        width: 5rem;
+        width: fit-content;
+        max-width: 5rem;
         height: 5rem;
         margin: 0 auto;
         margin-bottom: -0.15rem;
@@ -48,23 +50,26 @@
         overflow: hidden;
 
         img {
+            display: block;
             width: 100%;
             height: 100%;
             object-fit: contain;
             pointer-events: none;
+            margin: 0;
+            padding: 0;
         }
     }
 
     .activeLine {
         background: transparent;
         margin: 5px auto;
-        width: 5rem;
+        width: 100%;
+        max-width: 5rem;
         height: 0.1rem;
         margin-bottom: -0.25rem;
 
         &.active {
             background-color: rgb(75, 85, 93);
-
         }
     }
 
