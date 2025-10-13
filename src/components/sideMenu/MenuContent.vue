@@ -1702,7 +1702,8 @@
   .slide-menu {
     position: absolute;
     top: 0rem;
-    left: 10rem;
+    left: 0;
+    margin-left: 11rem;
     width: 30rem;
     max-height: 100%;
     background-color: rgb(255, 255, 255);

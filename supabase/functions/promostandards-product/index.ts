@@ -71,6 +71,14 @@ serve(async (req) => {
     const normalizedProduct = normalizeProduct(productId, productData);
     const colors = normalizedProduct.colors;
 
+    const missingPreviewReports: Array<{
+      colorId: string;
+      colorName: string | null;
+      configurationId: string | null;
+      missingFront: boolean;
+      missingBack: boolean;
+    }> = [];
+
     const colorsWithMedia = await Promise.all(colors.map(async (color) => {
       const enriched: NormalizedColor = {
         ...color,
@@ -99,12 +107,22 @@ serve(async (req) => {
           enriched.backUrl = normalizedFront.replace('_f_', '_b_');
         }
 
-        if (!enriched.frontUrl || !enriched.backUrl) {
+        const missingFront = !enriched.frontUrl;
+        const missingBack = !enriched.backUrl;
+        if (missingFront || missingBack) {
           console.warn('[SSA] Incomplete preview imagery, skipping color', {
             productId,
             colorId: color.id,
+            colorName: color.name,
             configurationId,
             preview,
+          });
+          missingPreviewReports.push({
+            colorId: color.id,
+            colorName: color.name ?? null,
+            configurationId,
+            missingFront,
+            missingBack,
           });
           return null;
         }
@@ -145,7 +163,18 @@ serve(async (req) => {
     };
 
     if (!filteredColors.length) {
-      return jsonResponse({ error: 'No preview imagery available for requested product' }, 404);
+      const detail = missingPreviewReports.map((report) => {
+        const parts: string[] = [];
+        if (report.missingFront) parts.push('front');
+        if (report.missingBack) parts.push('back');
+        const missing = parts.length ? parts.join(' & ') : 'imagery';
+        const nameSegment = report.colorName ? `${report.colorName} [${report.colorId || 'n/a'}]` : (report.colorId || 'unknown color');
+        return `${nameSegment} (configuration ${report.configurationId ?? 'n/a'} missing ${missing})`;
+      }).join('; ');
+      const message = detail
+        ? `No preview imagery available for product ${productId}. Missing assets: ${detail}`
+        : `No preview imagery available for product ${productId}.`;
+      return jsonResponse({ error: message }, 404);
     }
 
     if (!filteredColors.some((color) => color.id === responseBody.product.defaultColorId)) {
@@ -409,47 +438,6 @@ function enrichColorWithMedia(color: NormalizedColor, mediaResponse: any): Norma
   let front: string | null = null;
   let back: string | null = null;
   let side: string | null = null;
-
-  if (swatchId) {
-    // Use swatch id directly for CDN URLs
-    front = `${CDN_COLOR_BASE}/${swatchId}_f_fl.jpg`;
-    side = `${CDN_COLOR_BASE}/${swatchId}_d_fl.jpg`;
-    back = `${CDN_COLOR_BASE}/${swatchId}_b_fl.jpg`;
-  } else {
-    // Fallback to existing logic with extractColorCodeFromMedia
-    front =
-      pickByClass(CLASS_TYPE_PRIORITY.FRONT)
-      ?? pool.find((item) => /front|primary/i.test(item.classType ?? item.location ?? item.description ?? ''))?.url
-      ?? pool.find((item) => /_f_/i.test(item.url))?.url
-      ?? pool[0]?.url
-      ?? null;
-
-    back =
-      pickByClass(CLASS_TYPE_PRIORITY.BACK)
-      ?? pool.find((item) => /rear|back/i.test(item.classType ?? item.location ?? item.description ?? ''))?.url
-      ?? pool.find((item) => /_b_/i.test(item.url))?.url
-      ?? pool.find((item) => item.url && item.url !== front)?.url
-      ?? null;
-
-    side =
-      pool.find((item) => /side|profile|left|right/i.test(item.classType ?? item.location ?? item.description ?? ''))?.url
-      ?? pool.find((item) => /_(sd|d|s)_/i.test(item.url) && item.url !== front && item.url !== back)?.url
-      ?? null;
-
-    // Only call extractColorCodeFromMedia if swatchId was not found
-    const colorCode = extractColorCodeFromMedia(mediaArray, colorNameLower) ?? extractColorCodeFromMedia(pool, colorNameLower);
-    if (colorCode) {
-      front = `${CDN_COLOR_BASE}/${colorCode}_f_fl.jpg`;
-      if (!side) side = `${CDN_COLOR_BASE}/${colorCode}_d_fl.jpg`;
-      if (!back) back = `${CDN_COLOR_BASE}/${colorCode}_b_fl.jpg`;
-    } else {
-      if (!front && pool.length) front = pool[0]?.url ?? null;
-      if (!back && pool.length) back = pool.find((item) => item.url && item.url !== front)?.url ?? pool[0]?.url ?? null;
-    }
-  }
-  if (!side) {
-    side = deriveSideUrl(front) ?? deriveSideUrl(back);
-  }
 
   return {
     ...color,
