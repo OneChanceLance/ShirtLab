@@ -10,83 +10,7 @@
 
     </div>
   </CanvasArea>
-  <transition name="clothing-overlay-fade">
-    <div v-if="showClothingPicker" class="clothing-overlay" role="dialog" aria-modal="true">
-      <div class="clothing-overlay__panel">
-
-        <div class="clothing-overlay__filters">
-          <div class="search-bar" role="search">
-            <span class="search-bar__icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" focusable="false">
-                <path
-                  d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.71.71l.27.28v.79l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z" />
-              </svg>
-            </span>
-            <input v-model="clothingSearch" type="search" class="search-bar__input"
-              placeholder="Search by name, brand, or code" />
-            <button v-if="clothingSearch" type="button" class="search-bar__clear" aria-label="Clear search"
-              @click="clothingSearch = ''">
-              <svg viewBox="0 0 24 24" focusable="false">
-                <path
-                  d="m12 10.586 4.95-4.95 1.414 1.414L13.414 12l4.95 4.95-1.414 1.414L12 13.414l-4.95 4.95-1.414-1.414L10.586 12 5.636 7.05 7.05 5.636 12 10.586z" />
-              </svg>
-            </button>
-          </div>
-          <div class="filter-dropdowns">
-            <div class="filter-group">
-              <label class="filter-label" for="category-filter">Category</label>
-              <div class="filter-select__wrapper">
-                <select id="category-filter" v-model="selectedCategory" class="filter-select">
-                  <option v-for="option in categoryOptions" :key="option.id" :value="option.id">
-                    {{ option.label }}
-                  </option>
-                </select>
-                <span class="filter-select__icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" focusable="false">
-                    <path d="M7 10l5 5 5-5z" />
-                  </svg>
-                </span>
-              </div>
-            </div>
-            <div v-if="subcategoryOptions.length > 1" class="filter-group">
-              <label class="filter-label" for="subcategory-filter">Subcategory</label>
-              <div class="filter-select__wrapper">
-                <select id="subcategory-filter" v-model="selectedSubcategory" class="filter-select">
-                  <option v-for="option in subcategoryOptions" :key="option.id" :value="option.id">
-                    {{ option.label }}
-                  </option>
-                </select>
-                <span class="filter-select__icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" focusable="false">
-                    <path d="M7 10l5 5 5-5z" />
-                  </svg>
-                </span>
-              </div>
-            </div>
-          </div>
-
-        </div>
-        <div class="clothing-overlay__body">
-          <div v-if="overlayLoading" class="status">Loading styles…</div>
-          <div v-else-if="overlayError" class="status error">{{ overlayError }}</div>
-          <div v-else-if="filteredClothing.length === 0" class="status">No styles match your filters.</div>
-          <div v-else :class="['clothing-grid', { 'clothing-grid--pair': filteredClothing.length <= 2 }]">
-            <button v-for="item in filteredClothing" :key="item.id" type="button"
-              :class="['clothing-card', { selected: String(item.id ?? '') === activeItemId }]"
-              @click="applyClothingItem(item)">
-              <div class="clothing-card__preview">
-                <img :src="resolvePreview(item) || overlayFallbackPreview" :alt="item.name || 'Garment preview'" />
-              </div>
-              <div class="clothing-card__meta">
-                <h3>{{ item.name || 'Unnamed Style' }}</h3>
-                <p>{{ formatClothingMeta(item) }}</p>
-              </div>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </transition>
+  <ClothingOverlay v-bind="overlayConfig" @apply="applyClothingItem" />
 </template>
 
 <script setup lang="ts">
@@ -95,6 +19,7 @@
   import CanvasArea from '../canvasArea/CanvasArea.vue';
   import SideMenu from '../sideMenu/SideMenu.vue';
   import ShirtPlacer from './ShirtPlacer.vue';
+  import ClothingOverlay, { type ClothingOverlayProps } from './ClothingOverlay.vue';
   import { getClothesByAnyCode, getClothingItemById, getClothingItemByAnyCode } from './clothesDb';
   import { setProductColors, setSelectedProductColorIndex, setSelectedProductSize, selectedProductSize } from '../sideMenu/types/colorList';
   import { supabase } from '../../supabase';
@@ -315,8 +240,17 @@
     return null;
   }
 
-  function resolvePreview(item: ClothingItemRow): string | null {
-    const colors = normalizeColors((item as any)?.colors);
+  function hasSideView(color: Record<string, any> | undefined): boolean {
+    const candidate = resolveColorImage(color, 'side');
+    return typeof candidate === 'string' && candidate.trim().length > 0;
+  }
+
+  function sanitizeColors(value: any): any[] {
+    return normalizeColors(value).filter((entry) => hasSideView(entry));
+  }
+
+  function resolvePreview(item: ClothingItemRow): string | undefined {
+    const colors = sanitizeColors((item as any)?.colors);
     const defaultColorId = (item as any)?.default_color_id ?? (item as any)?.defaultColorId ?? (item as any)?.defaultColorID ?? null;
     let choice = colors.find((entry: any) => entry?.id === defaultColorId);
     if (!choice) choice = colors[0];
@@ -334,7 +268,7 @@
     for (const candidate of fallbacks) {
       if (typeof candidate === 'string' && candidate.trim()) return candidate;
     }
-    return null;
+    return undefined;
   }
 
   const categoryMap = computed(() => {
@@ -360,10 +294,108 @@
     return map;
   });
 
+  function extractItemBrand(item: ClothingItemRow): string {
+    const candidates = [
+      (item as any)?.brand,
+      (item as any)?.brand_name,
+      (item as any)?.brandName,
+      (item as any)?.manufacturer,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed) return trimmed;
+      }
+    }
+    return '';
+  }
+
+  function normalizeGenderCode(value: string): string | null {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return null;
+    const condensed = trimmed.replace(/[^a-z]/g, '');
+    if (!condensed) return null;
+    if (['men', 'man', 'mens', 'male', 'guy', 'guys', 'gent', 'gents', 'm'].includes(condensed)) return 'men';
+    if (['women', 'woman', 'womens', 'female', 'lady', 'ladies', 'w', 'girls', 'girl', 'f'].includes(condensed)) return 'women';
+    if (
+      condensed.includes('unisex') ||
+      ['unisex', 'uni', 'unis', 'adult', 'all', 'both'].includes(condensed)
+    ) {
+      return 'unisex';
+    }
+    return null;
+  }
+
+  function collectGenderCodesFromValue(target: Set<string>, value: any) {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      for (const entry of value) collectGenderCodesFromValue(target, entry);
+      return;
+    }
+    if (typeof value === 'string') {
+      const parsedArray = asArray(value);
+      if (parsedArray.length) {
+        collectGenderCodesFromValue(target, parsedArray);
+        return;
+      }
+      const parts = value.split(/[|/,&\s]+/);
+      for (const part of parts) {
+        const normalized = normalizeGenderCode(part);
+        if (normalized) target.add(normalized);
+      }
+      return;
+    }
+    if (typeof value === 'object') {
+      const fields = [
+        (value as any)?.code,
+        (value as any)?.gender,
+        (value as any)?.value,
+        (value as any)?.id,
+        (value as any)?.label,
+        (value as any)?.name,
+      ];
+      for (const field of fields) {
+        if (typeof field === 'string') {
+          const normalized = normalizeGenderCode(field);
+          if (normalized) target.add(normalized);
+        }
+      }
+    }
+  }
+
+  function extractItemGenders(item: ClothingItemRow): string[] {
+    const target = new Set<string>();
+    const candidates = [
+      (item as any)?.genders,
+      (item as any)?.gender,
+      (item as any)?.gender_code,
+      (item as any)?.genderCode,
+    ];
+    for (const candidate of candidates) {
+      collectGenderCodesFromValue(target, candidate);
+    }
+    return Array.from(target);
+  }
+
+  function matchesGenderFilter(genderCodes: string[], filter: string): boolean {
+    if (!filter || filter === 'all') return true;
+    if (!genderCodes.length) return false;
+    if (filter === 'men') return genderCodes.includes('men') || genderCodes.includes('unisex');
+    if (filter === 'women') return genderCodes.includes('women') || genderCodes.includes('unisex');
+    if (filter === 'unisex') return genderCodes.includes('unisex');
+    return false;
+  }
+
+  function matchesBrandFilter(itemBrand: string, filter: string): boolean {
+    if (!filter || filter === 'all') return true;
+    if (!itemBrand) return false;
+    return itemBrand.toLowerCase() === filter.trim().toLowerCase();
+  }
+
   function formatClothingMeta(item: ClothingItemRow): string {
     const parts: string[] = [];
-    const brand = (item as any)?.brand;
-    if (typeof brand === 'string' && brand.trim()) parts.push(brand.trim());
+    const brand = extractItemBrand(item);
+    if (brand) parts.push(brand);
     const code = (item as any)?.code ?? (item as any)?.sku;
     if (typeof code === 'string' && code.trim()) parts.push(code.trim());
     const categoryId = itemCategoryId(item);
@@ -380,9 +412,10 @@
     categoryMap.value.forEach((label, id) => {
       entries.push({ id, label });
     });
-    entries.sort((a, b) => a.label.localeCompare(b.label));
+    // Sort by category id using natural sort (alphanumeric, numeric-aware)
+    entries.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' }));
     return [
-      { id: CATEGORY_ALL, label: 'All categories' },
+      { id: CATEGORY_ALL, label: 'All' },
       ...entries,
     ];
   });
@@ -398,32 +431,42 @@
       }
       entries.push({ id, label });
     });
-    entries.sort((a, b) => a.label.localeCompare(b.label));
+    // Sort by subcategory id using natural sort (alphanumeric, numeric-aware)
+    entries.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' }));
     return [
-      { id: SUBCATEGORY_ALL, label: 'All subcategories' },
+      { id: SUBCATEGORY_ALL, label: 'All' },
       ...entries,
     ];
   });
 
   const filteredClothing = computed(() => {
     const query = clothingSearch.value.trim().toLowerCase();
+    const brandFilter = selectedBrand.value;
+    const genderFilter = selectedGender.value;
     return clothingItems.value.filter((item) => {
       const itemCat = itemCategoryId(item);
-      if (selectedCategory.value !== CATEGORY_ALL) {
-        if (!itemCat || itemCat !== selectedCategory.value) return false;
+      if (selectedCategory.value !== CATEGORY_ALL && (!itemCat || itemCat !== selectedCategory.value)) {
+        return false;
       }
 
       const itemSub = itemSubcategoryId(item);
-      if (selectedSubcategory.value !== SUBCATEGORY_ALL) {
-        if (!itemSub || itemSub !== selectedSubcategory.value) return false;
+      if (selectedSubcategory.value !== SUBCATEGORY_ALL && (!itemSub || itemSub !== selectedSubcategory.value)) {
+        return false;
       }
+
+      const brand = extractItemBrand(item);
+      if (!matchesBrandFilter(brand, brandFilter)) return false;
+
+      const genderCodes = extractItemGenders(item);
+      if (!matchesGenderFilter(genderCodes, genderFilter)) return false;
 
       if (!query) return true;
       const haystack: string[] = [];
-      const baseFields = [item.name, (item as any)?.brand, (item as any)?.code, (item as any)?.sku];
+      const baseFields = [item.name, (item as any)?.code, (item as any)?.sku];
       for (const field of baseFields) {
         if (typeof field === 'string' && field.trim()) haystack.push(field.trim().toLowerCase());
       }
+      if (brand) haystack.push(brand.toLowerCase());
       const categoryLabel = categoryMap.value.get(itemCat);
       if (categoryLabel && categoryLabel.trim()) haystack.push(categoryLabel.trim().toLowerCase());
       const subEntry = subcategoryMap.value.get(itemSub);
@@ -432,8 +475,27 @@
       }
       const colors = normalizeColors((item as any)?.colors);
       for (const color of colors) {
-        const colorName = typeof color?.name === 'string' ? color.name : typeof color?.label === 'string' ? color.label : '';
+        const colorName = typeof color?.name === 'string'
+          ? color.name
+          : typeof color?.label === 'string'
+            ? color.label
+            : '';
         if (colorName && colorName.trim()) haystack.push(colorName.trim().toLowerCase());
+      }
+      for (const genderCode of genderCodes) {
+        // add gender terms to make them searchable
+        haystack.push(genderCode);
+        if (genderCode === 'men') {
+          haystack.push("men's");
+          haystack.push('mens');
+        }
+        if (genderCode === 'women') {
+          haystack.push("women's");
+          haystack.push('womens');
+        }
+        if (genderCode === 'unisex') {
+          haystack.push('uni');
+        }
       }
       return haystack.some((entry) => entry.includes(query));
     });
@@ -454,6 +516,71 @@
     const hasSelection = options.some((option) => option.id === selectedSubcategory.value);
     if (!hasSelection) selectedSubcategory.value = SUBCATEGORY_ALL;
   });
+
+  type ClothingOverlayBindings = ClothingOverlayProps & {
+    'onUpdate:search': (value: string) => void;
+    'onUpdate:selectedCategory': (value: string) => void;
+    'onUpdate:selectedSubcategory': (value: string) => void;
+    'onUpdate:selectedGender': (value: string) => void;
+    'onUpdate:selectedBrand': (value: string) => void;
+  };
+
+  const selectedGender = ref<string>('all'); // or set to a default value as needed
+  const selectedBrand = ref<string>('all');
+  // Dynamically generate unique brand options from clothingItems
+  const brandOptions = computed(() => {
+    const map = new Map<string, string>();
+    for (const item of clothingItems.value) {
+      const brand = extractItemBrand(item);
+      if (!brand) continue;
+      const key = brand.toLowerCase();
+      if (!map.has(key)) map.set(key, brand);
+    }
+    const entries = Array.from(map.values())
+      .sort((a, b) => a.localeCompare(b))
+      .map((label) => ({ id: label, label }));
+    return [{ id: 'all', label: 'All' }, ...entries];
+  });
+
+  watch(brandOptions, (options) => {
+    if (selectedBrand.value === 'all') return;
+    const hasSelection = options.some((option) => option.id === selectedBrand.value);
+    if (!hasSelection) selectedBrand.value = 'all';
+  });
+
+  const overlayConfig = computed<ClothingOverlayBindings>(() => ({
+    show: showClothingPicker.value,
+    search: clothingSearch.value,
+    categoryOptions: categoryOptions.value,
+    selectedCategory: selectedCategory.value,
+    subcategoryOptions: subcategoryOptions.value,
+    selectedSubcategory: selectedSubcategory.value,
+    selectedGender: selectedGender.value,
+    selectedBrand: selectedBrand.value,
+    brandOptions: brandOptions.value,
+    overlayLoading: overlayLoading.value,
+    overlayError: overlayError.value,
+    filteredClothing: filteredClothing.value,
+    activeItemId: activeItemId.value,
+    overlayFallbackPreview,
+    resolvePreview,
+    formatClothingMeta,
+    'onUpdate:search': (value: string) => {
+      clothingSearch.value = value;
+    },
+    'onUpdate:selectedCategory': (value: string) => {
+      selectedCategory.value = value;
+    },
+    'onUpdate:selectedSubcategory': (value: string) => {
+      selectedSubcategory.value = value;
+    },
+    'onUpdate:selectedGender': (value: string) => {
+      selectedGender.value = value || 'all';
+    },
+    'onUpdate:selectedBrand': (value: string) => {
+      selectedBrand.value = value || 'all';
+    },
+  }));
 
   watch(selectedProductSize, (size) => {
     const update: Record<string, any> = { size: size ?? null };
@@ -478,7 +605,15 @@
         .order('updated_at', { ascending: false });
 
       if (error) throw error;
-      clothingItems.value = Array.isArray(data) ? data : [];
+      const source = Array.isArray(data) ? data : [];
+      const filtered = source
+        .map((entry) => {
+          const colors = sanitizeColors((entry as any)?.colors);
+          if (!colors.length) return null;
+          return { ...entry, colors };
+        })
+        .filter((entry): entry is ClothingItemRow => Boolean(entry));
+      clothingItems.value = filtered;
     } catch (err: any) {
       console.error('[ShirtLab] Failed to load clothing items', err);
       if (err?.code === '42P01') {
@@ -539,7 +674,11 @@
   }
 
   function applyClothingItem(item: ClothingItemRow) {
-    const colors = normalizeColors((item as any)?.colors);
+    const colors = sanitizeColors((item as any)?.colors);
+    if (!colors.length) {
+      clothingError.value = 'Selected style has no colors with side previews.';
+      return;
+    }
     setProductColors(colors);
     const defaultColorId = (item as any)?.default_color_id ?? (item as any)?.defaultColorId ?? (item as any)?.defaultColorID ?? null;
     let selectedIndex = colors.findIndex((color: any) => color?.id === defaultColorId);
@@ -749,7 +888,11 @@
           autoGenerated: gridJson.autoGenerated ?? gridJson.auto ?? null,
         };
 
-        const colorsArr: any[] = Array.isArray(item.colors) ? item.colors : [];
+        const colorsArr: any[] = sanitizeColors(item.colors);
+        if (!colorsArr.length) {
+          clothingError.value = 'Loaded style has no colors with side previews.';
+          return false;
+        }
         let selectedIdx = Number.isInteger(colorIndex) ? colorIndex : 0;
         if (colorsArr.length) {
           const defaultColorIdItem = (item as any).default_color_id ?? (item as any).defaultColorId ?? (item as any).defaultColorID ?? null;
@@ -1074,359 +1217,5 @@
     }
   }
 
-  .clothing-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    justify-content: center;
-
-    background: rgba(15, 23, 42, 0.55);
-    z-index: 5000;
-  }
-
-  .clothing-overlay__panel {
-    background: #fff;
-    border-radius: 1rem;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    padding: 2rem;
-    box-shadow: 0 30px 60px rgba(15, 23, 42, 0.28);
-    max-height: 100%;
-    overflow: hidden;
-  }
-
-  .clothing-overlay__header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 1rem;
-
-    h2 {
-      margin: 0;
-      font-size: 1.75rem;
-      line-height: 1.2;
-    }
-
-    p {
-      margin: 0.25rem 0 0;
-      color: #4b5563;
-      font-size: 0.95rem;
-    }
-  }
-
-  .clothing-overlay__header-actions {
-    display: flex;
-    gap: 0.75rem;
-
-    .ghost {
-      border-radius: 9999px;
-      border: 1px solid rgba(15, 23, 42, 0.15);
-      background: transparent;
-      padding: 0.45rem 1.1rem;
-      font-size: 0.85rem;
-      cursor: pointer;
-      transition: background 0.2s ease;
-
-      &:hover {
-        background: rgba(15, 23, 42, 0.04);
-      }
-    }
-  }
-
-  .clothing-overlay__filters {
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
-
-  .search-bar {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    width: 100%;
-    box-sizing: border-box;
-    padding: 0.7rem 1.1rem;
-    border-radius: 9999px;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    background: linear-gradient(135deg, rgba(248, 250, 252, 0.95), rgba(226, 232, 240, 0.85));
-    box-shadow: 0 18px 35px rgba(15, 23, 42, 0.12);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-
-    &:focus-within {
-      border-color: rgba(14, 165, 233, 0.65);
-      box-shadow: 0 22px 45px rgba(14, 116, 144, 0.18);
-      background: linear-gradient(135deg, rgba(236, 254, 255, 0.95), rgba(224, 242, 254, 0.88));
-    }
-  }
-
-  @supports (backdrop-filter: blur(8px)) {
-    .search-bar {
-      backdrop-filter: blur(8px);
-      background: rgba(248, 250, 252, 0.7);
-
-      &:focus-within {
-        background: rgba(224, 242, 254, 0.9);
-      }
-    }
-  }
-
-  .search-bar__icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding-left: 0.25rem;
-  }
-
-  .search-bar__icon svg,
-  .search-bar__clear svg {
-    width: 1.1rem;
-    height: 1.1rem;
-    fill: #64748b;
-  }
-
-  .search-bar__input {
-    flex: 1;
-    border: none;
-
-    background: transparent;
-    font-size: 0.95rem;
-    color: #0f172a;
-
-    &::placeholder {
-      color: #94a3b8;
-    }
-
-    &:focus {
-      outline: none;
-    }
-  }
-
-  .search-bar__clear {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background: rgba(148, 163, 184, 0.16);
-    border-radius: 50%;
-    width: 1.8rem;
-    height: 1.8rem;
-    cursor: pointer;
-    transition: background 0.2s ease, transform 0.2s ease;
-
-    &:hover {
-      background: rgba(14, 165, 233, 0.2);
-      transform: scale(1.04);
-    }
-
-    &:focus {
-      outline: none;
-      box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.35);
-    }
-  }
-
-  .filter-dropdowns {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: 1rem;
-    padding: 0.75rem 0.9rem;
-    border-radius: 1rem;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    background: rgba(241, 245, 249, 0.75);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 12px 25px rgba(15, 23, 42, 0.08);
-  }
-
-  .filter-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .filter-label {
-    font-size: 0.75rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #64748b;
-  }
-
-  .filter-select__wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(226, 232, 240, 0.8));
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    border-radius: 0.9rem;
-    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-
-    &:focus-within {
-      border-color: #94c9408c;
-      box-shadow: 0 18px 32px rgba(90, 144, 14, 0.2);
-    }
-  }
-
-  .filter-select {
-    appearance: none;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    background: transparent;
-    border: none;
-    padding: 0.65rem 2.5rem 0.65rem 1rem;
-    width: 100%;
-    font-size: 0.95rem;
-    color: #0f172a;
-    cursor: pointer;
-
-    &:focus {
-      outline: none;
-    }
-
-    option {
-      color: #0f172a;
-      background: #f1f5f9;
-    }
-  }
-
-  .filter-select__icon {
-    position: absolute;
-    right: 0.85rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-
-    svg {
-      width: 1.1rem;
-      height: 1.1rem;
-      fill: #475569;
-    }
-  }
-
-  @media (max-width: 720px) {
-    .filter-dropdowns {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  .clothing-overlay__body {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .status {
-    margin: auto;
-    font-size: 1rem;
-    color: #475569;
-
-    &.error {
-      color: #b91c1c;
-    }
-  }
-
-  .clothing-grid {
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    overflow-y: auto;
-    padding-right: 0.25rem;
-    padding-top: 0.25rem;
-  }
-
-  .clothing-grid--pair {
-    /* Keep cards next to each other when there are only two */
-    display: flex;
-
-    /* center the two tracks, avoiding one on each edge */
-  }
-
-  .clothing-card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    padding: 1rem;
-    width: minmax(200px, 1fr);
-
-    border-radius: 1rem;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    background: #f8fafc;
-    text-align: left;
-    cursor: pointer;
-    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-
-    &:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.14);
-      border-color: rgba(15, 23, 42, 0.15);
-      background: #fff;
-    }
-
-    &.selected {
-      border-color: rgba(15, 118, 110, 0.6);
-      box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.25);
-      background: #ecfeff;
-    }
-
-    h3 {
-      margin: 0;
-      font-size: 1rem;
-      font-weight: 600;
-      color: #0f172a;
-    }
-
-    p {
-      margin: 0;
-      color: #64748b;
-      font-size: 0.85rem;
-    }
-  }
-
-  .clothing-card__preview {
-    background: #fff;
-    border-radius: 0.9rem;
-    aspect-ratio: 1 / 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-
-    img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-    }
-  }
-
-  .clothing-overlay-fade-enter-active,
-  .clothing-overlay-fade-leave-active {
-    transition: opacity 0.22s ease;
-  }
-
-  .clothing-overlay-fade-enter-from,
-  .clothing-overlay-fade-leave-to {
-    opacity: 0;
-  }
-
-  @media (max-width: 960px) {
-    .clothing-overlay {
-      padding: 1rem;
-    }
-
-    .clothing-overlay__panel {
-      padding: 1.5rem;
-    }
-
-    .clothing-grid {
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    }
-
-    .clothing-grid--pair {
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      justify-content: center;
-    }
-  }
+  /* Clothing overlay styles moved to ClothingOverlay.vue */
 </style>
