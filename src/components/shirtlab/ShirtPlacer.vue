@@ -63,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-  import { onMounted, watch, ref, reactive } from 'vue';
+  import { onMounted, onUnmounted, watch, ref, reactive } from 'vue';
 
   import DeleteIcon from 'vue-material-design-icons/Close.vue'
   import DuplicateIcon from 'vue-material-design-icons/ContentDuplicate.vue'
@@ -74,8 +74,9 @@
   import type { TextObject, ImageObject } from './types'
   // ADD with the other imports
   import { withDefaults, getEffectTransform, getEffectAdvance, applyToContext } from '../sideMenu/types/effectsList';
-  import { findMeasurementForSize, findSpecValueInInches, normalizeSizeLabel } from '../../utils/sizeMeasurements';
-  import type { SizeMeasurementEntry, SizeMeasurementSpec } from '../../utils/sizeMeasurements';
+  import { getAABB, getAABBCorners, getRotatedCorners, pointInRotatedRect } from './utils/geometry';
+  import { useDesignLayers } from './composables/useDesignLayers';
+  import { createGridState, hydrateSizeMeasurements, type DesignGrid, type View } from './composables/useGrid';
 
   const props = defineProps<{
     clothing?: {
@@ -109,23 +110,46 @@
   const textIconComponents = [DeleteIcon, ArrowLeftRight, DuplicateIcon, RotateIcon];
   const fallbackPreview = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 
-  // --- Text handles logic ---
-  let resizingText = false;
-  // Drag state for text dragging
-  let draggingTextIndex = -1;
-  let textDragOffset = { x: 0, y: 0 };
+  // -----------------------------------------------------
+  // Reactive State & Composables
+  // -----------------------------------------------------
+
+  /**
+   * Runtime bookkeeping for drag/resize interactions across canvas object types.
+   */
+  const dragState = reactive({
+    text: {
+      isResizing: false,
+      index: -1,
+      offset: { x: 0, y: 0 },
+    },
+    image: {
+      index: -1,
+      resizeHandle: -1,
+      resizingIndex: -1,
+      offset: { x: 0, y: 0 },
+    },
+    guide: {
+      isDragging: false,
+      handle: -1,
+      offset: { x: 0, y: 0 },
+    },
+  });
 
 
   // at top-level (script setup)
   let onWinMove: ((e: MouseEvent) => void) | null = null;
   let onWinUp: ((e: MouseEvent) => void) | null = null;
 
+  /**
+   * Begins resizing a text object by wiring global mouse listeners to the drag loop.
+   */
   function handleTextMouseDown(index: number, event: MouseEvent) {
     event.preventDefault();
     if (index !== 1) return; // only BR resize
     if (!selectedObject.value || selectedObject.value.type !== 'text') return;
 
-    resizingText = true;
+    dragState.text.isResizing = true;
     mouseDown.value = true;
 
     // global listeners so drag works even though we started on a DOM handle
@@ -136,6 +160,9 @@
     window.addEventListener('mouseup', onWinUp);
   }
 
+  /**
+   * Samples the garment edges to approximate its dominant background colour.
+   */
   function estimateBackgroundColor(data: Uint8ClampedArray, width: number, height: number) {
     const samples = [
       [0, 0],
@@ -161,6 +188,9 @@
     return { r: r / count, g: g / count, b: b / count };
   }
 
+  /**
+   * Detects a printable grid from the garment image and updates measurements accordingly.
+   */
   function autoFitGridFromBackground() {
     if (!shirtBgLoaded.value) return;
     const iw = (shirtBg as any).naturalWidth || shirtBg.width;
@@ -289,6 +319,9 @@
     draw();
   }
 
+  /**
+   * Computes the visual handle position for a selected text block.
+   */
   function getTextHandlePosition(pos: 'topLeft' | 'bottomRight') {
     const t = selectedObject.value as TextObject;
     const ctx = canvas.value?.getContext('2d');
@@ -310,6 +343,9 @@
     return { top: 0, left: 0 };
   }
 
+  /**
+   * Executes selected text toolbar actions like delete, duplicate, or rotate.
+   */
   function handleTextClick(index: number) {
     const t = selectedObject.value as TextObject;
     if (!t) return;
@@ -334,101 +370,16 @@
     draw();
   }
 
-  const images = reactive<ImageObject[]>([]);
-  const texts = reactive<TextObject[]>([]);
-
-  // unified layering
-  let zCounter = 1;
-  // Get all objects with their z-order, sorted ascending by z (lowest first, topmost last)
-  function getAllObjectsByZ() {
-    const all = [...images, ...texts] as Array<any>;
-    all.sort((a, b) => ((a.z ?? 0) - (b.z ?? 0))); // lowest -> highest (topmost last)
-    return all;
-  }
-
-  function rebalanceZ() {
-    const all = getAllObjectsByZ();
-    all.forEach((o: any, i: number) => (o.z = i + 1));
-    zCounter = all.length + 1;
-  }
-
-  function getZExtrema() {
-    const all = [...images, ...texts] as Array<any>;
-    let minZ = Infinity, maxZ = -Infinity;
-    for (const o of all) {
-      const z = o.z ?? 0;
-      if (z < minZ) minZ = z;
-      if (z > maxZ) maxZ = z;
-    }
-    if (!isFinite(minZ)) minZ = 0;
-    if (!isFinite(maxZ)) maxZ = 0;
-    return { minZ, maxZ };
-  }
-
-  // --- Rotated rectangle helpers ---
-  function getRotationRadians(item: { rotation?: number }) {
-    return ((item.rotation || 0) * Math.PI) / 180;
-  }
-
-  function getRotatedCorners(item: { x: number; y: number; w: number; h: number; rotation?: number }) {
-    const cx = item.x + item.w / 2;
-    const cy = item.y + item.h / 2;
-    const rad = getRotationRadians(item);
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-
-    // unrotated corners
-    const TL = { x: item.x, y: item.y };
-    const TR = { x: item.x + item.w, y: item.y };
-    const BL = { x: item.x, y: item.y + item.h };
-    const BR = { x: item.x + item.w, y: item.y + item.h };
-
-    function rot(p: { x: number; y: number }) {
-      const dx = p.x - cx;
-      const dy = p.y - cy;
-      return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
-    }
-    return { TL: rot(TL), TR: rot(TR), BL: rot(BL), BR: rot(BR) };
-  }
-
-  // Helper to compute the axis-aligned bounding box corners of a rotated item
-  function getAABBCorners(item: { x: number; y: number; w: number; h: number; rotation?: number }) {
-    const c = getRotatedCorners(item);
-    const minX = Math.min(c.TL.x, c.TR.x, c.BL.x, c.BR.x);
-    const maxX = Math.max(c.TL.x, c.TR.x, c.BL.x, c.BR.x);
-    const minY = Math.min(c.TL.y, c.TR.y, c.BL.y, c.BR.y);
-    const maxY = Math.max(c.TL.y, c.TR.y, c.BL.y, c.BR.y);
-    return {
-      TL: { x: minX, y: minY },
-      TR: { x: maxX, y: minY },
-      BL: { x: minX, y: maxY },
-      BR: { x: maxX, y: maxY },
-    };
-  }
-
-  function pointInRotatedRect(px: number, py: number, item: { x: number; y: number; w: number; h: number; rotation?: number }) {
-    const cx = item.x + item.w / 2;
-    const cy = item.y + item.h / 2;
-    const rad = -getRotationRadians(item); // inverse
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-    const dx = px - cx;
-    const dy = py - cy;
-    const lx = dx * cos - dy * sin;
-    const ly = dx * sin + dy * cos;
-    return (lx >= -item.w / 2 && lx <= item.w / 2 && ly >= -item.h / 2 && ly <= item.h / 2);
-  }
-
-  // Axis-aligned bounding box (AABB) of the rotated rect
-  function getAABB(item: { x: number; y: number; w: number; h: number; rotation?: number }) {
-    const c = getRotatedCorners(item);
-    const minX = Math.min(c.TL.x, c.TR.x, c.BL.x, c.BR.x);
-    const maxX = Math.max(c.TL.x, c.TR.x, c.BL.x, c.BR.x);
-    const minY = Math.min(c.TL.y, c.TR.y, c.BL.y, c.BR.y);
-    const maxY = Math.max(c.TL.y, c.TR.y, c.BL.y, c.BR.y);
-    return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
-  }
-
+  const {
+    images,
+    texts,
+    selectedObject,
+    zCounter,
+    getAllObjectsByZ,
+    rebalanceZ,
+    getZExtrema,
+    deselectAll,
+  } = useDesignLayers();
   // Translate item so its rotated AABB stays fully inside the grid
   function clampIntoGrid(item: { x: number; y: number; w: number; h: number; rotation?: number }) {
     const grid = resolveGrid();
@@ -459,10 +410,12 @@
     }
   }
 
+  /**
+   * Handles clicks on image toolbar handles (resize/delete/duplicate/rotate).
+   */
   function handleMouseDown(index: number, event: MouseEvent) {
     event.preventDefault();
     if (index === 1) { // Only for resize handle
-      console.log('Holding down on resize handle');
       const rect = canvas.value!.getBoundingClientRect();
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
@@ -483,8 +436,8 @@
           x >= hx - size / 2 && x <= hx + size / 2 &&
           y >= hy - size / 2 && y <= hy + size / 2
         ) {
-          resizeHandleIndex = 1;
-          resizingImageIndex = i;
+          dragState.image.resizeHandle = 1;
+          dragState.image.resizingIndex = i;
           mouseDown.value = true;
           return;
         }
@@ -492,6 +445,9 @@
     }
   }
 
+  /**
+   * Executes image-level actions triggered through the floating toolbar.
+   */
   function handleImageClick(index: number) {
     const img = selectedObject.value as ImageObject;
     if (!img || img.type !== 'image') return;
@@ -524,20 +480,7 @@
 
 
   // Guide area constants
-  const showGrid = ref(true);
-  type View = 'Front' | 'Back' | 'Sleeve';
   const selectedView = ref<View>('Front');
-  type DesignGrid = {
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-    widthInches?: number | null;
-    heightInches?: number | null;
-    dpi?: number | null;
-    auto?: boolean | null;
-    autoGenerated?: boolean | null;
-  };
 
   const DEFAULT_GRID: DesignGrid = {
     x: 175,
@@ -551,30 +494,29 @@
     autoGenerated: null,
   };
 
-  const lastDetectionMetrics = reactive({
-    garmentWidthPx: 0,
-    garmentHeightPx: 0,
-    gridWidthPx: 0,
-    gridHeightPx: 0,
-  });
+  // -----------------------------------------------------
+  // Grid Configuration & Measurement Helpers
+  // -----------------------------------------------------
 
-  const clothingDetails = ref({
-    name: '',
-    image: '',
-    grid: { ...DEFAULT_GRID },
-    style: '',
-    gender: '',
-    size: '',
-    sizeMeasurements: [] as SizeMeasurementEntry[],
-  });
+  const {
+    showGrid,
+    clothingDetails,
+    lastDetectionMetrics,
+    resolveGrid,
+    markGridManual,
+    shouldAutoDetect,
+    requestMeasurementRefresh,
+    getPixelsPerInch,
+    resetClothingDetails,
+  } = createGridState(DEFAULT_GRID);
 
-  function resolveGrid(): DesignGrid {
-    const grid = clothingDetails.value.grid as DesignGrid | undefined;
-    return { ...DEFAULT_GRID, ...(grid || {}) };
-  }
+  // -----------------------------------------------------
+  // View Management
+  // -----------------------------------------------------
 
-  function markGridManual() { }
-
+  /**
+   * Persists current view state, switches to the requested view, and refreshes the canvas.
+   */
   function switchView(next: View, options: { skipStore?: boolean } = {}) {
     const { skipStore = false } = options;
     // Allow switching even if already on the side, always store state and update preview
@@ -591,6 +533,9 @@
     requestAutoGrid(false);
   }
 
+  /**
+   * Maps UI labels to internal view keys and forwards to `switchView`.
+   */
   function handleViewSelect(label: string) {
     let view: View = 'Front';
     if (label === 'Back') view = 'Back';
@@ -598,172 +543,10 @@
     switchView(view);
   }
 
-  function numeric(val: any | null | undefined): number | undefined {
-    const num = Number(val);
-    return Number.isFinite(num) ? num : undefined;
-  }
-
-  function hydrateSizeMeasurements(value: any): SizeMeasurementEntry[] {
-    let source: any[] = [];
-    if (Array.isArray(value)) {
-      source = value;
-    } else if (typeof value === 'string') {
-      try {
-        const parsed = JSON.parse(value);
-        if (Array.isArray(parsed)) source = parsed;
-      } catch {
-        source = [];
-      }
-    }
-
-    const normalized: SizeMeasurementEntry[] = [];
-    for (const entry of source) {
-      const sizeLabel = typeof entry?.sizeLabel === 'string'
-        ? entry.sizeLabel.trim()
-        : typeof entry?.label === 'string'
-          ? entry.label.trim()
-          : '';
-      if (!sizeLabel) continue;
-
-      const normalizedLabel = typeof entry?.normalizedLabel === 'string' && entry.normalizedLabel.trim()
-        ? normalizeSizeLabel(entry.normalizedLabel)
-        : normalizeSizeLabel(sizeLabel);
-
-      const specsRaw = Array.isArray(entry?.specs) ? entry.specs : [];
-      const specs: SizeMeasurementSpec[] = [];
-      for (const spec of specsRaw) {
-        const rawKey = typeof spec?.key === 'string' && spec.key.trim()
-          ? spec.key.trim()
-          : typeof spec?.type === 'string'
-            ? spec.type.trim()
-            : '';
-        const key = rawKey.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-        if (!key) continue;
-
-        const type = typeof spec?.type === 'string' && spec.type.trim() ? spec.type.trim() : rawKey || key;
-        const unit = typeof spec?.unit === 'string' && spec.unit.trim() ? spec.unit.trim() : 'inches';
-        const value = Number(spec?.value ?? spec?.measurementValue);
-        if (!Number.isFinite(value)) continue;
-        const rawValueInInches = Number((spec as any)?.valueInInches ?? (spec as any)?.value_in_inches);
-        const valueInInches = Number.isFinite(rawValueInInches) ? rawValueInInches : null;
-
-        specs.push({
-          key,
-          type,
-          unit,
-          value,
-          valueInInches,
-        });
-      }
-
-      if (!specs.length) continue;
-
-      normalized.push({ sizeLabel, normalizedLabel, specs });
-    }
-
-    return normalized;
-  }
-
-  function getSizeMeasurements(): SizeMeasurementEntry[] {
-    const entries = (clothingDetails.value as any).sizeMeasurements;
-    if (Array.isArray(entries)) return entries as SizeMeasurementEntry[];
-    return [];
-  }
-
-  function getActiveSizeMeasurement(): SizeMeasurementEntry | undefined {
-    const entries = getSizeMeasurements();
-    if (!entries.length) return undefined;
-    const activeSize = (clothingDetails.value as any).size;
-    return findMeasurementForSize(entries, typeof activeSize === 'string' ? activeSize : undefined);
-  }
-
-  function applyMeasurementsToGridFromCurrent(): boolean {
-    const measurement = getActiveSizeMeasurement();
-    if (!measurement) return false;
-
-    const garmentWidth = lastDetectionMetrics.garmentWidthPx;
-    const garmentHeight = lastDetectionMetrics.garmentHeightPx;
-    const gridWidth = lastDetectionMetrics.gridWidthPx;
-    const gridHeight = lastDetectionMetrics.gridHeightPx;
-
-    if (!garmentWidth || !garmentHeight || !gridWidth || !gridHeight) return false;
-
-    const grid = clothingDetails.value.grid;
-
-    const chestInches = findSpecValueInInches(measurement, ['chest', 'chest_width', 'body_width', 'width', 'half_chest']);
-    const lengthInches = findSpecValueInInches(measurement, ['length', 'body_length', 'center_front_body_length']);
-
-    let updated = false;
-
-    if (chestInches && chestInches > 0) {
-      const widthInches = Number((chestInches * (gridWidth / garmentWidth)).toFixed(2));
-      if (Number.isFinite(widthInches) && widthInches > 0) {
-        clothingDetails.value.grid.widthInches = widthInches;
-        updated = true;
-      }
-    }
-
-    if (lengthInches && lengthInches > 0) {
-      const heightInches = Number((lengthInches * (gridHeight / garmentHeight)).toFixed(2));
-      if (Number.isFinite(heightInches) && heightInches > 0) {
-        clothingDetails.value.grid.heightInches = heightInches;
-        updated = true;
-      }
-    }
-
-    if (updated) {
-      const ratios: number[] = [];
-      if (clothingDetails.value.grid.widthInches && clothingDetails.value.grid.widthInches > 0 && grid.w > 0) {
-        ratios.push(grid.w / clothingDetails.value.grid.widthInches);
-      }
-      if (clothingDetails.value.grid.heightInches && clothingDetails.value.grid.heightInches > 0 && grid.h > 0) {
-        ratios.push(grid.h / clothingDetails.value.grid.heightInches);
-      }
-      if (ratios.length) {
-        const avg = ratios.reduce((acc, val) => acc + val, 0) / ratios.length;
-        clothingDetails.value.grid.dpi = Number(avg.toFixed(2));
-      }
-      clothingDetails.value.grid.auto = true;
-      clothingDetails.value.grid.autoGenerated = true;
-    }
-
-    return updated;
-  }
-
-  function requestMeasurementRefresh() {
-    applyMeasurementsToGridFromCurrent();
-  }
-
-  const DEFAULT_INCH_PX = 40;
-
-  function shouldAutoDetect(grid: DesignGrid | null | undefined = clothingDetails.value.grid as DesignGrid) {
-    if (!grid) return true;
-    if (grid.auto === false || grid.autoGenerated === false) return false;
-    return true;
-  }
-
-  function getPixelsPerInch(): number {
-    const grid = resolveGrid();
-
-    const explicitDpi = numeric((grid as any).pxPerInch ?? (grid as any).pixelsPerInch ?? grid.dpi);
-    if (explicitDpi && explicitDpi > 0) return explicitDpi;
-
-    const widthInches = numeric((grid as any).widthInches ?? (grid as any).physicalWidth ?? (grid as any).widthIn ?? (grid as any).width_in);
-    const heightInches = numeric((grid as any).heightInches ?? (grid as any).physicalHeight ?? (grid as any).heightIn ?? (grid as any).height_in);
-
-    const ratios: number[] = [];
-    if (widthInches && widthInches > 0 && grid.w > 0) ratios.push(grid.w / widthInches);
-    if (heightInches && heightInches > 0 && grid.h > 0) ratios.push(grid.h / heightInches);
-
-    if (ratios.length) {
-      return ratios.reduce((acc, val) => acc + val, 0) / ratios.length;
-    }
-
-    return DEFAULT_INCH_PX;
-  }
-
+  /**
+   * Horizontally centers the active text block within the current grid bounds.
+   */
   function centerSelectedText() {
-    console.log("Centering")
     const t = selectedObject.value;
     if (!t || t.type !== 'text') return;
 
@@ -778,6 +561,9 @@
     draw();
   }
 
+  /**
+   * Clones the active text block with a slight offset for quick iteration.
+   */
   function duplicateSelectedText() {
     const t = selectedObject.value as any;
     if (!t || t.type !== 'text') return;
@@ -797,6 +583,9 @@
     draw();
   }
 
+  /**
+   * Raises the active object to the top of the z-stack.
+   */
   function bringSelectedForward() {
     const sel = selectedObject.value as any;
     if (!sel) return;
@@ -806,6 +595,9 @@
     draw();
   }
 
+  /**
+   * Sends the active object to the back of the z-stack.
+   */
   function sendSelectedBack() {
     const sel = selectedObject.value as any;
     if (!sel) return;
@@ -817,51 +609,28 @@
   // Listen for clothing selection events from parent
   // If using v-on="selectClothing" directly, receive as prop instead, or use event bus.
   // Here, we'll assume you receive it as a prop or via a custom event.
+  /**
+   * Reacts to external "selectClothing" events from the surrounding application.
+   */
   function handleClothingSelect(details: any) {
     if (!details) return;
     updateClothing(details);
 
-    texts.splice(0, texts.length);
-    viewStates.Front = { images: [], texts: [] };
-    viewStates.Back = { images: [], texts: [] };
-    viewStates.Sleeve = { images: [], texts: [] };
-    frontPreview.value = '';
-    backPreview.value = '';
-    sleevePreview.value = '';
-    selectedObject.value = null;
-    storeViewState('Front');
-    if (selectedView.value !== 'Front') {
-      selectedView.value = 'Front';
-    } else {
-      loadViewState('Front');
-      setShirtBackground(viewToSrc.Front || '');
-    }
+    resetDesignState('Front');
+    setShirtBackground(viewToSrc.Front || '');
+    draw();
   }
 
-  // Option 1: Listen to custom event (e.g. $emit('selectClothing', {...}))
-  if (typeof window !== 'undefined') {
-    window.addEventListener('shirtlab-selectClothing', (e: any) => {
-      handleClothingSelect(e.detail);
-    });
-  }
+  const clothingSelectionHandler: EventListener = (event: Event) => {
+    const custom = event as CustomEvent;
+    handleClothingSelect(custom.detail);
+  };
 
   const fileInput = ref<HTMLInputElement | null>(null);
 
-  watch(showGrid, () => {
-    draw();
-  });
-
-  watch(() => clothingDetails.value.grid, () => {
-    draw();
-  }, { deep: true });
-
-  watch(() => clothingDetails.value.size, () => {
-    requestMeasurementRefresh();
-  });
-
-  watch(() => clothingDetails.value.sizeMeasurements, () => {
-    requestMeasurementRefresh();
-  }, { deep: true });
+  // -----------------------------------------------------
+  // Canvas Setup & Background Assets
+  // -----------------------------------------------------
 
   const mouseDown = ref(false);
 
@@ -873,6 +642,9 @@
   const pendingAutoGrid = ref(false);
   let autoGridFrame: number | null = null;
 
+  /**
+   * Schedules automatic grid detection once the background image is available.
+   */
   function requestAutoGrid(immediate = false) {
     if (!shouldAutoDetect()) return;
     pendingAutoGrid.value = true;
@@ -881,6 +653,9 @@
     }
   }
 
+  /**
+   * Executes auto grid measurement on the next animation frame, if pending.
+   */
   function scheduleAutoGridMeasurement() {
     if (!pendingAutoGrid.value || !shirtBgLoaded.value) return;
     if (autoGridFrame !== null) return;
@@ -905,6 +680,9 @@
   const shirtBg = new window.Image();
   shirtBg.crossOrigin = 'anonymous';
 
+  /**
+   * Loads the garment image, wiring success/error handling and auto-detect refresh.
+   */
   function setShirtBackground(src?: string | null) {
     const next = src || '';
     shirtBgLoaded.value = false;
@@ -936,6 +714,9 @@
 
   // ---- Garment background transform (for fine alignment) ----
   const bgTransform = reactive({ offsetX: 0, offsetY: 150, scale: 1 });
+  /**
+   * Applies manual background adjustments and requests a fresh auto grid.
+   */
   function setBackgroundTransform(t: { offsetX?: number; offsetY?: number; scale?: number }) {
     if (typeof t.offsetX === 'number') bgTransform.offsetX = t.offsetX;
     if (typeof t.offsetY === 'number') bgTransform.offsetY = t.offsetY;
@@ -944,105 +725,15 @@
     requestAutoGrid(true);
   }
 
-  onMounted(() => {
-    storeViewState(selectedView.value);
-    updatePreviewFor(selectedView.value);
-    loadViewState(selectedView.value);
-    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '');
-  });
+  // -----------------------------------------------------
+  // View Asset Mapping & Previews
+  // -----------------------------------------------------
+
   const viewToSrc = reactive<Record<View, string>>({
     Front: props.clothing?.front || props.clothing?.colors?.[0]?.background || '',
     Back: props.clothing?.back || props.clothing?.front || props.clothing?.colors?.[0]?.background || '',
     Sleeve: props.clothing?.side || props.clothing?.front || '',
   });
-  watch(() => props.clothing, (c) => {
-    if (!c) return;
-
-    const colorsArray = Array.isArray(c.colors) ? c.colors : [];
-    const primaryColor = colorsArray[0] ?? {};
-    const colorBackground = typeof primaryColor?.background === 'string' ? primaryColor.background : '';
-    const colorSide = typeof primaryColor?.sideUrl === 'string'
-      ? primaryColor.sideUrl
-      : typeof primaryColor?.side === 'string'
-        ? primaryColor.side
-        : '';
-
-    const backgroundChange = Boolean(c.front || c.back || c.side || colorBackground || colorSide);
-    const incomingGrid = c.grid as DesignGrid | undefined;
-    if (incomingGrid) {
-      clothingDetails.value.grid = { ...resolveGrid(), ...incomingGrid };
-    } else {
-      clothingDetails.value.grid = { ...DEFAULT_GRID };
-    }
-    requestAutoGrid(!backgroundChange);
-
-    if (Object.prototype.hasOwnProperty.call(c, 'sizeMeasurements')) {
-      clothingDetails.value.sizeMeasurements = hydrateSizeMeasurements((c as any).sizeMeasurements);
-    }
-    if (Object.prototype.hasOwnProperty.call(c, 'size')) {
-      clothingDetails.value.size = typeof (c as any).size === 'string' ? (c as any).size : '';
-    }
-
-    if (c.front) viewToSrc.Front = c.front;
-    if (c.back) {
-      viewToSrc.Back = c.back;
-    } else if (c.front) {
-      viewToSrc.Back = c.front;
-    }
-
-    if (c.side) {
-      viewToSrc.Sleeve = c.side;
-    } else if (colorSide) {
-      viewToSrc.Sleeve = colorSide;
-    }
-
-    if (!c.front && !c.back && colorBackground) {
-      viewToSrc.Front = colorBackground;
-      viewToSrc.Back = colorBackground;
-    }
-
-    if (!viewToSrc.Sleeve) {
-      viewToSrc.Sleeve = colorSide || c.side || viewToSrc.Front || viewToSrc.Back || '';
-    }
-
-    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '');
-
-    images.splice(0, images.length);
-    texts.splice(0, texts.length);
-    viewStates.Front = { images: [], texts: [] };
-    viewStates.Back = { images: [], texts: [] };
-    viewStates.Sleeve = { images: [], texts: [] };
-    frontPreview.value = '';
-    backPreview.value = '';
-    sleevePreview.value = '';
-    selectedObject.value = null;
-    storeViewState('Front');
-    if (selectedView.value !== 'Front') {
-      selectedView.value = 'Front';
-    } else {
-      loadViewState('Front');
-      setShirtBackground(viewToSrc.Front || '');
-    }
-
-    requestMeasurementRefresh();
-  }, { immediate: true, deep: true });
-
-  // Each placed image object: { img, x, y, w, h, aspect, origW, origH, isSelected }
-  let dragOffset = { x: 0, y: 0 };
-  let draggingIndex = -1;
-
-  let resizeHandleIndex = -1;
-  let resizingImageIndex = -1;
-  let resizeGuideHandle = -1;
-
-  // For dragging the guide boundary's center in create mode
-  let draggingGuide = false;
-  let guideDragOffset = { x: 0, y: 0 };
-
-  type PlacedObject = ImageObject | TextObject;
-
-  const selectedObject = ref<PlacedObject | null>(null);
-
   const viewStates: Record<View, { images: ImageObject[]; texts: TextObject[] }> = {
     Front: { images: [], texts: [] },
     Back: { images: [], texts: [] },
@@ -1081,6 +772,24 @@
     };
   }
 
+  /**
+   * Clears previews, selections, and per-view caches before loading a new garment/view.
+   */
+  function resetDesignState(target: View = 'Front') {
+    images.splice(0, images.length);
+    texts.splice(0, texts.length);
+    viewStates.Front = { images: [], texts: [] };
+    viewStates.Back = { images: [], texts: [] };
+    viewStates.Sleeve = { images: [], texts: [] };
+    frontPreview.value = '';
+    backPreview.value = '';
+    sleevePreview.value = '';
+    selectedObject.value = null;
+    storeViewState('Front');
+    selectedView.value = target;
+    loadViewState(target);
+  }
+
   function storeViewState(view: View) {
     const state = viewStates[view];
     state.images = images.map(cloneImageObject);
@@ -1095,7 +804,7 @@
     images.forEach((img) => (img.isSelected = false));
     texts.forEach((txt) => (txt.isSelected = false));
     const { maxZ } = getZExtrema();
-    zCounter = (isFinite(maxZ) ? maxZ : 0) + 1;
+    zCounter.value = (isFinite(maxZ) ? maxZ : 0) + 1;
 
     // Rehydrate <img> for each image (CORS-safe)
     for (const img of images) {
@@ -1260,6 +969,9 @@
     }
   }
 
+  /**
+   * Reads image uploads and routes them through the unified object pipeline.
+   */
   function onFileChange(e: Event) {
     const files = (e.target as HTMLInputElement).files;
     if (!files) return;
@@ -1276,6 +988,9 @@
     }
   }
 
+  /**
+   * Returns the scaled placement of the garment image within the canvas viewport.
+   */
   function computeShirtTransform(imageWidth: number, imageHeight: number) {
     const iw = Math.max(1, imageWidth);
     const ih = Math.max(1, imageHeight);
@@ -1288,6 +1003,9 @@
     return { scale, width, height, offsetX, offsetY };
   }
 
+  /**
+   * Renders the current garment image or a fallback when unavailable.
+   */
   function drawShirtBg(ctx: CanvasRenderingContext2D) {
     if (shirtBgLoaded.value) {
       const iw = (shirtBg as any).naturalWidth || shirtBg.width || 1;
@@ -1308,6 +1026,9 @@
   // Glyph-tight layout that accounts for overshoots (H, J, swashes, etc.)
   // Glyph-tight layout + word wrap + alignment
   // Word-only wrap (no letter-by-letter splits, no hyphens)
+  /**
+   * Performs glyph-aware word wrapping and metrics gathering for a text object.
+   */
   function layoutTextBlock(ctx: CanvasRenderingContext2D, t: TextObject) {
     const basePx = Math.max(1, getPixelsPerInch());
     const pxSize = t.size * basePx;
@@ -1423,6 +1144,9 @@
   }
 
   // Draw rulers (call after grid lines, before objects)
+  /**
+   * Draws inch-based rulers around the active grid using the current DPI estimate.
+   */
   function drawRulers(ctx: CanvasRenderingContext2D, gridX: number, gridY: number, gridWidth: number, gridHeight: number) {
     const inchPx = getPixelsPerInch();
     if (!Number.isFinite(inchPx) || inchPx <= 0) return;
@@ -1480,6 +1204,9 @@
     ctx.restore();
   }
 
+  /**
+   * Main canvas renderer combining background, guides, and ordered objects.
+   */
   function draw() {
     const ctx = canvas.value?.getContext('2d');
     if (!ctx) return;
@@ -1656,6 +1383,9 @@
 
   onMounted(draw);
 
+  /**
+   * Hit-tests all drawable objects in z-order to find the top-most match.
+   */
   function findObjectAt(x: number, y: number): { type: 'image' | 'text'; index: number } | null {
     const ctx = canvas.value?.getContext('2d');
     const ordered = getAllObjectsByZ() as Array<any>;
@@ -1682,8 +1412,10 @@
   }
 
 
+  /**
+   * Updates the canvas cursor based on hovered handles or objects.
+   */
   function onHover(e: MouseEvent) {
-    console.log("Hovering")
     const rect = canvas.value!.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -1748,6 +1480,9 @@
   }
 
   // Drag logic
+  /**
+   * Begins dragging for images or text depending on the hit-test result.
+   */
   function startDrag(e: MouseEvent) {
     e.preventDefault();
     mouseDown.value = true;
@@ -1783,9 +1518,9 @@
               // Do nothing here. Triggered on click only.
               return;
             case 1: // TR - resize
-              resizeHandleIndex = 1;
-              resizingImageIndex = i;
-              draggingIndex = -1;
+              dragState.image.resizeHandle = 1;
+              dragState.image.resizingIndex = i;
+              dragState.image.index = -1;
               return;
             case 2: // BL - duplicate
             case 3: // BR - rotate
@@ -1817,9 +1552,9 @@
         selectedObject.value = t;
 
         // Enable dragging for text
-        draggingTextIndex = found.index;
-        textDragOffset.x = x - t.x;
-        textDragOffset.y = y - t.y;
+        dragState.text.index = found.index;
+        dragState.text.offset.x = x - t.x;
+        dragState.text.offset.y = y - t.y;
       }
     } else {
       selectedObject.value = null;
@@ -1827,27 +1562,30 @@
 
 
     // Image clicked: start image drag
-    draggingIndex = imgIdx;
+    dragState.image.index = imgIdx;
 
     if (imgIdx !== -1) {
-      dragOffset.x = x - images[imgIdx].x;
-      dragOffset.y = y - images[imgIdx].y;
+      dragState.image.offset.x = x - images[imgIdx].x;
+      dragState.image.offset.y = y - images[imgIdx].y;
     } else {
-      dragOffset.x = 0;
-      dragOffset.y = 0;
+      dragState.image.offset.x = 0;
+      dragState.image.offset.y = 0;
     }
     draw();
   }
 
+  /**
+   * Central drag loop handling text resizing, guide manipulation, and object movement.
+   */
   function onDrag(e: MouseEvent) {
     // Hide handles while dragging text
-    if (selectedObject.value?.type === 'text' && draggingTextIndex !== -1) {
+    if (selectedObject.value?.type === 'text' && dragState.text.index !== -1) {
       // Temporarily hide handles while dragging
       selectedObject.value.showHandles = false;
     }
 
     // Text box resize (width-only; rewrap handles height)
-    if (resizingText && selectedObject.value?.type === 'text') {
+    if (dragState.text.isResizing && selectedObject.value?.type === 'text') {
       const t = selectedObject.value as TextObject;
       const rect = canvas.value!.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
@@ -1898,17 +1636,16 @@
         return;
       }
     }
-    console.log("Dragging ", e)
     e.preventDefault();
     const rect = canvas.value!.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     // If dragging a text box, move it
-    if (draggingTextIndex !== -1) {
-      const t = texts[draggingTextIndex];
+    if (dragState.text.index !== -1) {
+      const t = texts[dragState.text.index];
       // Move text based on drag offset
-      t.x = x - textDragOffset.x;
-      t.y = y - textDragOffset.y;
+      t.x = x - dragState.text.offset.x;
+      t.y = y - dragState.text.offset.y;
 
       // Measure text size
       const ctx2 = canvas.value?.getContext('2d');
@@ -1928,12 +1665,12 @@
       return;
     }
     // Guide boundary resizing logic
-    if (resizeGuideHandle !== -1) {
+    if (dragState.guide.handle !== -1) {
       const xPos = x;
       const yPos = y;
 
       markGridManual();
-      switch (resizeGuideHandle) {
+      switch (dragState.guide.handle) {
 
         case 0: // TR
           clothingDetails.value.grid.w = xPos - clothingDetails.value.grid.x;
@@ -1966,19 +1703,19 @@
     }
 
     // Drag guide boundary by center if in create mode
-    if (draggingGuide) {
+    if (dragState.guide.isDragging) {
       const xPos = x;
       const yPos = y;
       markGridManual();
-      clothingDetails.value.grid.x = xPos - guideDragOffset.x;
-      clothingDetails.value.grid.y = yPos - guideDragOffset.y;
+      clothingDetails.value.grid.x = xPos - dragState.guide.offset.x;
+      clothingDetails.value.grid.y = yPos - dragState.guide.offset.y;
       draw();
       return;
     }
 
     // Only allow resizing from TR handle (index 1)
-    if (resizeHandleIndex === 1 && resizingImageIndex !== -1) {
-      const item = images[resizingImageIndex];
+    if (dragState.image.resizeHandle === 1 && dragState.image.resizingIndex !== -1) {
+      const item = images[dragState.image.resizingIndex];
       // Keep frame aspect constant regardless of rotation
       const effAspect = item.aspect;
       // Anchor at bottom-left
@@ -2009,10 +1746,10 @@
       draw();
       return;
     }
-    if (draggingIndex === -1) return;
-    const item = images[draggingIndex];
-    item.x = x - dragOffset.x;
-    item.y = y - dragOffset.y;
+    if (dragState.image.index === -1) return;
+    const item = images[dragState.image.index];
+    item.x = x - dragState.image.offset.x;
+    item.y = y - dragState.image.offset.y;
 
     // Constrain position using rotated AABB so it stays inside grid
     clampIntoGrid(item);
@@ -2020,6 +1757,9 @@
     draw();
   }
 
+  /**
+   * Ends any active drag, resets cursor state, and cleans up window listeners.
+   */
   function stopDrag() {
     if (onWinMove) window.removeEventListener('mousemove', onWinMove);
     if (onWinUp) window.removeEventListener('mouseup', onWinUp);
@@ -2032,26 +1772,32 @@
       selectedObject.value.showHandles = true;
     }
     mouseDown.value = false;
-    draggingIndex = -1;
-    resizeHandleIndex = -1;
-    resizingImageIndex = -1;
-    resizeGuideHandle = -1;
-    draggingGuide = false;
-    resizingText = false;
-    draggingTextIndex = -1;
+    dragState.image.index = -1;
+    dragState.image.resizeHandle = -1;
+    dragState.image.resizingIndex = -1;
+    dragState.image.offset.x = 0;
+    dragState.image.offset.y = 0;
+    dragState.guide.handle = -1;
+    dragState.guide.isDragging = false;
+    dragState.guide.offset.x = 0;
+    dragState.guide.offset.y = 0;
+    dragState.text.isResizing = false;
+    dragState.text.index = -1;
+    dragState.text.offset.x = 0;
+    dragState.text.offset.y = 0;
   }
 
-  function deselectAll() {
-    images.forEach(i => (i.isSelected = false));
-    texts.forEach(t => (t.isSelected = false));
-    selectedObject.value = null;
-  }
-
+  /**
+   * Programmatically triggers the hidden file input to upload assets.
+   */
   function openFileDialog() {
     fileInput.value?.click();
   }
 
   // Unified object upload (image/text) with correct type signatures
+  /**
+   * Creates text or image objects and inserts them into the shared layer stack.
+   */
   function uploadObject(
     type: 'image',
     payload: { imgUrl: string }
@@ -2070,7 +1816,6 @@
     }
   ): void;
   function uploadObject(type: 'image' | 'text', payload: any) {
-    console.log(type, payload)
     if (type === 'image') {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -2099,7 +1844,7 @@
           origW: img.width / 3,
           origH: img.height / 3,
           isSelected: true,
-          z: zCounter++,
+          z: zCounter.value++,
           rotation: 0,
           isVector: Boolean(vectorHint),
         } as ImageObject & Record<string, any>;
@@ -2138,7 +1883,7 @@
         w: clothingDetails.value.grid.w - 40,
         h: 60,
         isSelected: true,
-        z: zCounter++,
+        z: zCounter.value++,
         // 👇 NEW
         effect: { name: 'none', options: withDefaults('none') },
       });
@@ -2146,9 +1891,9 @@
       draw();
     }
   }
-
-  // TODO: Add watcher or reactive logic to update selected text object when text tab values change
-
+  /**
+   * Applies a new garment definition and refreshes dependent state (grid, previews, bg).
+   */
   function updateClothing(details: any) {
     if (!details) return;
 
@@ -2232,52 +1977,27 @@
 
     requestMeasurementRefresh();
 
-    images.splice(0, images.length);
+    resetDesignState('Front');
+    setShirtBackground(viewToSrc.Front || viewToSrc.Back || '');
     draw();
   }
 
+  /**
+   * Resets the designer to its initial empty state.
+   */
   function clearClothing() {
-    clothingDetails.value = {
-      name: '',
-      image: '',
-      grid: { ...DEFAULT_GRID },
-      style: '',
-      gender: '',
-      size: '',
-      sizeMeasurements: [],
-    };
+    resetClothingDetails();
     viewToSrc.Front = '';
     viewToSrc.Back = '';
     viewToSrc.Sleeve = '';
-    images.splice(0, images.length);
-    texts.splice(0, texts.length);
-    selectedObject.value = null;
-    viewStates.Front = { images: [], texts: [] };
-    viewStates.Back = { images: [], texts: [] };
-    viewStates.Sleeve = { images: [], texts: [] };
-    frontPreview.value = '';
-    backPreview.value = '';
-    sleevePreview.value = '';
+    resetDesignState('Front');
     setShirtBackground('');
     draw();
   }
 
-
-
-  watch(
-    selectedObject,
-    (newVal) => {
-      if (!newVal) return;
-
-      // Find the real text object in our texts array
-      const t = texts.find(txt => txt.id === newVal.id);
-      if (t) {
-        Object.assign(t, newVal); // sync any changed fields
-        draw();
-      }
-    },
-    { deep: true }
-  );
+  /**
+   * Updates garment imagery from the outside world without altering other state.
+   */
   function setClothingImages(imgs: { front?: string; back?: string; side?: string; sleeve?: string }) {
     if (imgs.front) viewToSrc.Front = imgs.front;
     if (imgs.back) {
@@ -2295,6 +2015,55 @@
     setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '');
     draw();
   }
+
+  // -----------------------------------------------------
+  // Lifecycle & Watchers
+  // -----------------------------------------------------
+
+  onMounted(() => {
+    storeViewState(selectedView.value);
+    updatePreviewFor(selectedView.value);
+    loadViewState(selectedView.value);
+    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '');
+    window.addEventListener('shirtlab-selectClothing', clothingSelectionHandler);
+  });
+
+  onUnmounted(() => {
+    window.removeEventListener('shirtlab-selectClothing', clothingSelectionHandler);
+  });
+
+  watch(showGrid, () => {
+    draw();
+  });
+
+  watch(() => clothingDetails.value.grid, () => {
+    draw();
+  }, { deep: true });
+
+  watch(() => clothingDetails.value.size, () => {
+    requestMeasurementRefresh();
+  });
+
+  watch(() => clothingDetails.value.sizeMeasurements, () => {
+    requestMeasurementRefresh();
+  }, { deep: true });
+
+  watch(() => props.clothing, (details) => {
+    if (details) {
+      updateClothing(details);
+    } else {
+      clearClothing();
+    }
+  }, { immediate: true, deep: true });
+
+  watch(selectedObject, (next) => {
+    if (!next) return;
+    const mirror = texts.find(txt => txt.id === next.id);
+    if (mirror) {
+      Object.assign(mirror, next);
+      draw();
+    }
+  }, { deep: true });
 
   defineExpose({
     openFileDialog,
