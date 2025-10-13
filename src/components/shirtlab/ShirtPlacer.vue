@@ -43,16 +43,8 @@
         <ViewPort label="Front" :is-active="selectedView === 'Front'"
           :preview-src="frontPreview || viewToSrc.Front || fallbackPreview" @select="handleViewSelect" />
         <ViewPort label="Back" :is-active="selectedView === 'Back'"
-          :preview-src="backPreview || viewToSrc.Back || viewToSrc.Front || fallbackPreview" @select="handleViewSelect" />
-        <ViewPort label="Sleeve" :is-active="selectedView === 'Sleeve'"
-          :preview-src="sleevePreview || viewToSrc.Sleeve || viewToSrc.Front || fallbackPreview"
+          :preview-src="backPreview || viewToSrc.Back || viewToSrc.Front || fallbackPreview"
           @select="handleViewSelect" />
-      </div>
-      <input type="button" :value="'Sleeve Design'" @click="switchView('Sleeve')" />
-      <div>
-        <span>
-          <img :src="Zoom">Zoom In/Out
-        </span>
       </div>
 
       <input type="button" @click="showGrid = !showGrid" :value="showGrid ? 'Hide Grid' : 'Show Grid'" />
@@ -523,13 +515,12 @@
     const previous = selectedView.value;
     if (!skipStore) {
       storeViewState(previous);
-      updatePreviewFor(previous);
+      updatePreviewFor(previous, { skipBackground: !shirtBgLoaded.value });
     }
 
     selectedView.value = next;
+    setShirtBackground(viewToSrc[next] || viewToSrc.Front || '', { mirror: viewMirrored[next] });
     loadViewState(next);
-    draw(); // Explicitly force canvas re-render after loading new side
-    setShirtBackground(viewToSrc[next] || viewToSrc.Front || '');
     requestAutoGrid(false);
   }
 
@@ -539,7 +530,6 @@
   function handleViewSelect(label: string) {
     let view: View = 'Front';
     if (label === 'Back') view = 'Back';
-    else if (label === 'Sleeve') view = 'Sleeve';
     switchView(view);
   }
 
@@ -617,7 +607,7 @@
     updateClothing(details);
 
     resetDesignState('Front');
-    setShirtBackground(viewToSrc.Front || '');
+    setShirtBackground(viewToSrc.Front || '', { mirror: viewMirrored.Front });
     draw();
   }
 
@@ -677,16 +667,18 @@
   const canvasCursor = ref("default");
   const shirtBgLoaded = ref(false);
   const shirtBgError = ref<string | null>(null);
+  const shirtBgMirrored = ref(false);
   const shirtBg = new window.Image();
   shirtBg.crossOrigin = 'anonymous';
 
   /**
    * Loads the garment image, wiring success/error handling and auto-detect refresh.
    */
-  function setShirtBackground(src?: string | null) {
+  function setShirtBackground(src?: string | null, options: { mirror?: boolean } = {}) {
     const next = src || '';
     shirtBgLoaded.value = false;
     shirtBgError.value = null;
+    shirtBgMirrored.value = Boolean(options.mirror);
 
     if (!next) {
       shirtBg.src = '';
@@ -726,31 +718,39 @@
   }
 
   // -----------------------------------------------------
+  const ALL_VIEWS: View[] = ['Front', 'Back'];
+
   // View Asset Mapping & Previews
   // -----------------------------------------------------
 
   const viewToSrc = reactive<Record<View, string>>({
     Front: props.clothing?.front || props.clothing?.colors?.[0]?.background || '',
     Back: props.clothing?.back || props.clothing?.front || props.clothing?.colors?.[0]?.background || '',
-    Sleeve: props.clothing?.side || props.clothing?.front || '',
+  });
+  const viewMirrored = reactive<Record<View, boolean>>({
+    Front: false,
+    Back: false,
   });
   const viewStates: Record<View, { images: ImageObject[]; texts: TextObject[] }> = {
     Front: { images: [], texts: [] },
     Back: { images: [], texts: [] },
-    Sleeve: { images: [], texts: [] },
   };
 
   const frontPreview = ref<string>('');
   const backPreview = ref<string>('');
-  const sleevePreview = ref<string>('');
+
+  function refreshAllPreviews() {
+    for (const view of ALL_VIEWS) {
+      const src = viewToSrc[view] || fallbackPreview;
+      setPreview(view, src);
+    }
+  }
 
   function setPreview(view: View, url: string) {
     if (view === 'Front') {
       frontPreview.value = url;
     } else if (view === 'Back') {
       backPreview.value = url;
-    } else {
-      sleevePreview.value = url;
     }
   }
 
@@ -780,10 +780,8 @@
     texts.splice(0, texts.length);
     viewStates.Front = { images: [], texts: [] };
     viewStates.Back = { images: [], texts: [] };
-    viewStates.Sleeve = { images: [], texts: [] };
     frontPreview.value = '';
     backPreview.value = '';
-    sleevePreview.value = '';
     selectedObject.value = null;
     storeViewState('Front');
     selectedView.value = target;
@@ -822,11 +820,12 @@
     draw();
   }
 
-  function updatePreviewFor(view: View) {
-    // Build a full-canvas preview (background + grid + rulers + objects)
+  function updatePreviewFor(view: View, { skipBackground = false } = {}) {
+    if (skipBackground) return;
+    // Build a full-canvas preview (background + objects only; no grid or rulers)
     const buildFull = (ctx: CanvasRenderingContext2D, includeBackground: boolean) => {
       // 1) Background (shirt), optional to avoid CORS taint
-      if (includeBackground) {
+      if (includeBackground && !skipBackground) {
         try {
           drawShirtBg(ctx);
         } catch (e) {
@@ -838,35 +837,8 @@
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
       }
 
-      // 2) Grid and rulers (mirror main draw logic)
-      if (showGrid.value) {
-        const gridRect = resolveGrid();
-        ctx.save();
-        ctx.strokeStyle = '#bbb';
-        ctx.lineWidth = 1;
-        const inchPx = getPixelsPerInch();
-        const candidateStep = inchPx / 2;
-        const gridStep = (Number.isFinite(candidateStep) && candidateStep > 4) ? candidateStep : 40;
-        for (let x = gridRect.x; x <= gridRect.x + gridRect.w; x += gridStep) {
-          ctx.beginPath();
-          ctx.moveTo(x, gridRect.y);
-          ctx.lineTo(x, gridRect.y + gridRect.h);
-          ctx.stroke();
-        }
-        for (let y = gridRect.y; y <= gridRect.y + gridRect.h; y += gridStep) {
-          ctx.beginPath();
-          ctx.moveTo(gridRect.x, y);
-          ctx.lineTo(gridRect.x + gridRect.w, y);
-          ctx.stroke();
-        }
-        ctx.strokeStyle = '#4af';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(gridRect.x, gridRect.y, gridRect.w, gridRect.h);
-        ctx.restore();
-
-        // Rulers
-        drawRulers(ctx, gridRect.x, gridRect.y, gridRect.w, gridRect.h);
-      }
+      // 2) (Omit grid lines and rulers for preview images)
+      // (Grid and rulers intentionally omitted in preview.)
 
       // 3) Objects (images + text) in z-order
       const ordered = getAllObjectsByZ() as Array<any>;
@@ -929,20 +901,45 @@
       }
     };
 
-    try {
-      // First, try cloning the live canvas directly (fast path)
-      const source = canvas.value;
-      if (source) {
-        try {
-          const url = source.toDataURL('image/png');
-          setPreview(view, url);
-          return;
-        } catch (directErr) {
-          console.warn('[updatePreviewFor] direct canvas toDataURL failed (likely CORS). Rebuilding...', directErr);
+    // Helper: Crop a canvas to the non-transparent content
+    function cropCanvasToContent(sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
+      const ctx = sourceCanvas.getContext('2d');
+      if (!ctx) return sourceCanvas;
+      const { width, height } = sourceCanvas;
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const data = imageData.data;
+      let minX = width, minY = height, maxX = -1, maxY = -1;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const idx = (y * width + x) * 4;
+          if (data[idx + 3] > 0) { // alpha > 0 means not transparent
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
         }
       }
+      // If no non-transparent pixel found, return a 1x1 transparent canvas
+      if (maxX < minX || maxY < minY) {
+        const empty = document.createElement('canvas');
+        empty.width = 1;
+        empty.height = 1;
+        return empty;
+      }
+      const cropW = maxX - minX + 1;
+      const cropH = maxY - minY + 1;
+      const croppedCanvas = document.createElement('canvas');
+      croppedCanvas.width = cropW;
+      croppedCanvas.height = cropH;
+      const croppedCtx = croppedCanvas.getContext('2d');
+      if (!croppedCtx) return sourceCanvas;
+      croppedCtx.drawImage(sourceCanvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+      return croppedCanvas;
+    }
 
-      // Rebuild offscreen full-canvas preview
+    try {
+      // Always build an offscreen preview (never clone live canvas directly)
       const previewCanvas = document.createElement('canvas');
       previewCanvas.width = canvasWidth;
       previewCanvas.height = canvasHeight;
@@ -952,7 +949,8 @@
       // Attempt with background included
       buildFull(ctx, true);
       try {
-        const url = previewCanvas.toDataURL('image/png');
+        const cropped = cropCanvasToContent(previewCanvas);
+        const url = cropped.toDataURL('image/png');
         setPreview(view, url);
         return;
       } catch (bgErr) {
@@ -962,7 +960,8 @@
       // Fallback: rebuild without background to avoid taint
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
       buildFull(ctx, false);
-      const url = previewCanvas.toDataURL('image/png');
+      const cropped = cropCanvasToContent(previewCanvas);
+      const url = cropped.toDataURL('image/png');
       setPreview(view, url);
     } catch (err) {
       console.warn('[updatePreviewFor] failed to build full-canvas preview:', err);
@@ -1011,7 +1010,15 @@
       const iw = (shirtBg as any).naturalWidth || shirtBg.width || 1;
       const ih = (shirtBg as any).naturalHeight || shirtBg.height || 1;
       const { width, height, offsetX, offsetY } = computeShirtTransform(iw, ih);
-      ctx.drawImage(shirtBg, offsetX, offsetY, width, height);
+      if (shirtBgMirrored.value) {
+        ctx.save();
+        ctx.translate(offsetX + width, offsetY);
+        ctx.scale(-1, 1);
+        ctx.drawImage(shirtBg, 0, 0, width, height);
+        ctx.restore();
+      } else {
+        ctx.drawImage(shirtBg, offsetX, offsetY, width, height);
+      }
     } else if (shirtBgError.value) {
       ctx.fillStyle = '#9ca3af';
       ctx.font = '16px sans-serif';
@@ -1376,7 +1383,7 @@
       }
     }
 
-    updatePreviewFor(selectedView.value);
+    updatePreviewFor(selectedView.value, { skipBackground: !shirtBgLoaded.value });
   }
 
 
@@ -1900,13 +1907,7 @@
     const colorsArray = Array.isArray(details.colors) ? details.colors : [];
     const primaryColor = colorsArray[0] ?? {};
     const bg = typeof primaryColor?.background === 'string' ? primaryColor.background : undefined;
-    const colorSide = typeof primaryColor?.sideUrl === 'string'
-      ? primaryColor.sideUrl
-      : typeof primaryColor?.side === 'string'
-        ? primaryColor.side
-        : undefined;
-    const explicitSide = typeof details.side === 'string' ? details.side : undefined;
-    const backgroundChange = Boolean(details.front || details.back || explicitSide || bg || colorSide);
+    const backgroundChange = Boolean(details.front || details.back || bg);
     const incomingGrid = details.grid as DesignGrid | undefined;
 
     if (incomingGrid) {
@@ -1935,41 +1936,32 @@
       }
     }
 
-    // Prefer explicit front/back; fallback to colors[0].background
     if (backgroundChange) {
       if (details.front) viewToSrc.Front = details.front;
-      if (details.back) viewToSrc.Back = details.back;
+      if (details.back) {
+        viewToSrc.Back = details.back;
+      } else if (details.front) {
+        viewToSrc.Back = details.front;
+      }
       if (!details.front && !details.back && bg) {
         viewToSrc.Front = bg;
         viewToSrc.Back = bg;
       }
-      if (explicitSide) {
-        viewToSrc.Sleeve = explicitSide;
-      } else if (colorSide) {
-        viewToSrc.Sleeve = colorSide;
-      }
-      // SS Activewear swatchId fallback
-      if (details.colors?.[0]?.swatchId) {
-        const sid = details.colors[0].swatchId;
-        viewToSrc.Front = `https://cdn.ssactivewear.com/Images/Color/${sid}_f_fl.jpg`;
-        viewToSrc.Back = `https://cdn.ssactivewear.com/Images/Color/${sid}_b_fl.jpg`;
-        if (!viewToSrc.Sleeve) {
-          viewToSrc.Sleeve = `https://cdn.ssactivewear.com/Images/Color/${sid}_d_fl.jpg`;
-        }
-      }
-      if (!viewToSrc.Sleeve && bg) {
-        viewToSrc.Sleeve = bg;
-      }
-      setShirtBackground(viewToSrc[selectedView.value] || '');
     }
+
     if (!backgroundChange && bg) {
       viewToSrc.Front = viewToSrc.Front || bg;
       viewToSrc.Back = viewToSrc.Back || bg;
-      viewToSrc.Sleeve = viewToSrc.Sleeve || explicitSide || colorSide || bg;
     }
-    if (!viewToSrc.Sleeve) {
-      viewToSrc.Sleeve = explicitSide || colorSide || viewToSrc.Front || viewToSrc.Back || '';
+
+    if (!viewToSrc.Back) {
+      viewToSrc.Back = viewToSrc.Front || '';
     }
+
+    viewMirrored.Front = false;
+    viewMirrored.Back = false;
+
+    refreshAllPreviews();
 
     if (details.bgTransform) {
       setBackgroundTransform(details.bgTransform);
@@ -1978,7 +1970,7 @@
     requestMeasurementRefresh();
 
     resetDesignState('Front');
-    setShirtBackground(viewToSrc.Front || viewToSrc.Back || '');
+    setShirtBackground(viewToSrc.Front || viewToSrc.Back || '', { mirror: viewMirrored.Front });
     draw();
   }
 
@@ -1989,30 +1981,32 @@
     resetClothingDetails();
     viewToSrc.Front = '';
     viewToSrc.Back = '';
-    viewToSrc.Sleeve = '';
+    viewMirrored.Front = false;
+    viewMirrored.Back = false;
     resetDesignState('Front');
-    setShirtBackground('');
+    setShirtBackground('', { mirror: false });
+    refreshAllPreviews();
     draw();
   }
 
   /**
    * Updates garment imagery from the outside world without altering other state.
    */
-  function setClothingImages(imgs: { front?: string; back?: string; side?: string; sleeve?: string }) {
+  function setClothingImages(imgs: { front?: string; back?: string; side?: string }) {
     if (imgs.front) viewToSrc.Front = imgs.front;
     if (imgs.back) {
       viewToSrc.Back = imgs.back;
     } else if (imgs.front) {
       viewToSrc.Back = imgs.front;
     }
-    const sleeveSrc = imgs.side ?? imgs.sleeve;
-    if (sleeveSrc) {
-      viewToSrc.Sleeve = sleeveSrc;
-    } else if (!viewToSrc.Sleeve) {
-      viewToSrc.Sleeve = viewToSrc.Front || viewToSrc.Back || '';
+    if (!viewToSrc.Back) {
+      viewToSrc.Back = viewToSrc.Front || '';
     }
+    viewMirrored.Front = false;
+    viewMirrored.Back = false;
     requestAutoGrid();
-    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '');
+    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '', { mirror: viewMirrored[selectedView.value] });
+    refreshAllPreviews();
     draw();
   }
 
@@ -2022,9 +2016,10 @@
 
   onMounted(() => {
     storeViewState(selectedView.value);
-    updatePreviewFor(selectedView.value);
+    updatePreviewFor(selectedView.value, { skipBackground: !shirtBgLoaded.value });
     loadViewState(selectedView.value);
-    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '');
+    setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '', { mirror: viewMirrored[selectedView.value] });
+    refreshAllPreviews();
     window.addEventListener('shirtlab-selectClothing', clothingSelectionHandler);
   });
 
@@ -2252,7 +2247,7 @@
     border-radius: 0.75rem;
     display: flex;
     flex-direction: column;
-    gap: 1.2rem;
+    gap: 0.2rem;
     padding: 0.75rem;
   }
 
