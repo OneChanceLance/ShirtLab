@@ -4,22 +4,26 @@
       <button class="admin-toggle" type="button" @click="toggleAdmin">
         {{ showAdmin ? 'Close Admin' : 'Open Admin Dashboard' }}
       </button>
-      <div class="embed-container">
-        <ShirtLab ref="shirtLabRef" :active-menu="activeMenu" @request-menu="handleMenuRequest" />
+      <div class="embed-wrapper">
+        <div class="embed-container">
+          <ShirtLab ref="shirtLabRef" :active-menu="activeMenu" @request-menu="handleMenuRequest" />
 
-        <MenuContent class="menu-overlay" :active-menu="activeMenu" :header-title="headerTitle"
-          :selectedObject="selectedObject" :draw="draw" @closeMenu="() => handleMenuRequest('', '')"
-          @uploadObject="handleUploadObjectFromMenu" @select-clothing="handleSelectClothingFromMenu"
-          @center-text="handleCenterTextFromMenu" @duplicate-text="handleDuplicateTextFromMenu"
-          @bring-forward="handleBringForwardFromMenu" @send-back="handleSendBackFromMenu" />
-
+          <MenuContent class="menu-overlay" :active-menu="activeMenu" :header-title="headerTitle"
+            :selectedObject="selectedObject" :draw="draw" @closeMenu="() => handleMenuRequest('', '')"
+            @uploadObject="handleUploadObjectFromMenu" @select-clothing="handleSelectClothingFromMenu"
+            @center-text="handleCenterTextFromMenu" @duplicate-text="handleDuplicateTextFromMenu"
+            @bring-forward="handleBringForwardFromMenu" @send-back="handleSendBackFromMenu" />
+        </div>
+        <CheckoutSummaryCard />
+        <CheckoutDrawer />
       </div>
-      <div class="money">
 
-      </div>
+
     </div>
+
     <SsActivewearMenu class="ssa-floating-menu" @variant-selected="handleVariantSelected" />
     <AdminDashboard v-if="showAdmin" @close="showAdmin = false" @apply="handleAdminApply" />
+
   </div>
 </template>
 
@@ -29,14 +33,19 @@
   import SsActivewearMenu from './components/SsActivewearMenu.vue';
   import MenuContent from './components/sideMenu/MenuContent.vue';
   import AdminDashboard from './components/admin/AdminDashboard.vue';
+  import CheckoutSummaryCard from './components/checkout/CheckoutSummaryCard.vue';
+  import CheckoutDrawer from './components/checkout/CheckoutDrawer.vue';
   import type { ImageObject, TextObject } from './components/shirtlab/types';
   import {
     PRODUCT_COLORS,
     selectedProductColorIndex,
+    selectedProductSize,
     setProductColors,
     setSelectedProductColorIndex,
     setSelectedProductSize,
   } from './components/sideMenu/types/colorList';
+  import { useCheckoutStore } from './stores/checkout';
+  import type { CheckoutColorSummary, CheckoutProductSummary } from './stores/checkout';
 
   type ShirtLabExpose = {
     applyExternalClothing(payload: any): void;
@@ -66,6 +75,7 @@
   const showAdmin = ref(false);
   const productColors = computed(() => PRODUCT_COLORS.value);
   const lastAppliedColorKey = ref<string | null>(null);
+  const checkoutStore = useCheckoutStore();
 
   function handleMenuRequest(menu: string, title: string) {
     isSelectionMenu.value = false;
@@ -133,10 +143,43 @@
   }
 
   function handleSelectClothingFromMenu(details: any) {
-    if (details?.colors && Array.isArray(details.colors)) {
+    if (!details) return;
+    const colors = Array.isArray(details?.colors) ? details.colors : [];
+    if (colors.length) {
       const defaultColorId = details?.default_color_id ?? details?.defaultColorId ?? details?.defaultColorID ?? null;
-      syncProductColors(details.colors, defaultColorId);
+      syncProductColors(colors, defaultColorId);
+      syncCheckoutColor();
     }
+
+    const productSummary: CheckoutProductSummary = {
+      id: String(details?.id ?? details?.style ?? details?.sku ?? details?.code ?? 'selected-product'),
+      name: details?.name ?? details?.productName ?? details?.product_name ?? null,
+      brand: details?.brand ?? details?.brandName ?? details?.brand_name ?? null,
+      description: details?.description ?? details?.productDescription ?? details?.product_description ?? null,
+    };
+
+    const rawMeasurements = Array.isArray(details?.sizeMeasurements)
+      ? details.sizeMeasurements
+      : Array.isArray(details?.size_measurements)
+        ? details.size_measurements
+        : [];
+
+    let manualSize: string | null = null;
+    if (Object.prototype.hasOwnProperty.call(details, 'size')) {
+      manualSize = typeof details.size === 'string' && details.size.trim() ? details.size.trim() : null;
+      setSelectedProductSize(manualSize);
+    }
+
+    const activeSize = manualSize ?? (typeof selectedProductSize.value === 'string' ? selectedProductSize.value : null);
+    const colorSummary = colors.length ? checkoutStore.color : null;
+    checkoutStore.setVariant({
+      product: productSummary,
+      color: colorSummary,
+      size: activeSize,
+      sizeMeasurements: Array.isArray(rawMeasurements) ? rawMeasurements : [],
+    });
+    checkoutStore.ensureMinimumQuantity();
+
     shirtLabRef.value?.updateClothing(details);
   }
 
@@ -173,6 +216,37 @@
       setSelectedProductSize(selectedSize);
     }
 
+    const productSummary: CheckoutProductSummary | null = payload?.product
+      ? {
+        id: String(payload.product.id ?? payload.product.style ?? 'product'),
+        name: payload.product.name ?? null,
+        brand: payload.product.brand ?? null,
+        description: payload.product.description ?? null,
+      }
+      : null;
+
+    const colorSummary: CheckoutColorSummary | null = payload?.color
+      ? {
+        id: String(payload.color.id ?? payload.color.code ?? payload.color.name ?? 'color'),
+        name: payload.color.name ?? payload.color.id ?? null,
+        hex: payload.color.hex ?? null,
+        price: parseNullableNumber(payload.color.price),
+        currency: payload.color.currency ?? null,
+        quantityMin: parseNullableNumber(payload.color.quantityMin),
+        frontUrl: imagery.front ?? payload.color.frontUrl ?? null,
+        backUrl: imagery.back ?? payload.color.backUrl ?? null,
+        sideUrl: imagery.side ?? payload.color.sideUrl ?? null,
+      }
+      : null;
+
+    checkoutStore.setVariant({
+      product: productSummary,
+      color: colorSummary,
+      size: selectedSize ?? null,
+      sizeMeasurements,
+    });
+    checkoutStore.ensureMinimumQuantity();
+
     shirtLabRef.value.applyExternalClothing({
       front: imagery.front,
       back: imagery.back,
@@ -187,6 +261,11 @@
 
   function toggleAdmin() {
     showAdmin.value = !showAdmin.value;
+  }
+
+  function parseNullableNumber(value: any): number | null {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   function resolveMediaMatch(media: any[], regex: RegExp, exclude?: string | null) {
@@ -277,6 +356,49 @@
     lastAppliedColorKey.value = key;
   }
 
+  function syncCheckoutColor() {
+    const colors = productColors.value;
+    if (!Array.isArray(colors) || colors.length === 0) {
+      checkoutStore.setColor(null);
+      return;
+    }
+    let idx = selectedProductColorIndex.value ?? 0;
+    if (idx < 0 || idx >= colors.length) idx = 0;
+    const color = colors[idx] ?? null;
+    if (!color) {
+      checkoutStore.setColor(null);
+      return;
+    }
+    const front = resolveFrontUrl(color);
+    const back = resolveBackUrl(color, front);
+    const side = resolveSideUrl(color, front, back);
+    const summary: CheckoutColorSummary = {
+      id: String(color?.id ?? color?.colorStyleID ?? idx),
+      name: color?.name ?? color?.colorName ?? color?.id ?? `Color ${idx + 1}`,
+      hex: typeof color?.hex === 'string' && color.hex
+        ? color.hex
+        : typeof color?.colorBackground === 'string' && color.colorBackground
+          ? color.colorBackground
+          : typeof color?.color === 'string' && color.color
+            ? color.color
+            : typeof color?.background === 'string' && color.background
+              ? color.background
+              : null,
+      price: parseNullableNumber(color?.price ?? color?.salePrice ?? color?.unitPrice),
+      currency: typeof color?.currency === 'string' && color.currency
+        ? color.currency
+        : typeof color?.currencyCode === 'string' && color.currencyCode
+          ? color.currencyCode
+          : null,
+      quantityMin: parseNullableNumber(color?.quantityMin ?? color?.minimumQuantity ?? color?.minQty),
+      frontUrl: front,
+      backUrl: back,
+      sideUrl: side,
+    };
+    checkoutStore.setColor(summary);
+    checkoutStore.ensureMinimumQuantity();
+  }
+
   function syncProductColors(colors: any[], defaultColorId?: string | null) {
     const normalized = Array.isArray(colors) ? colors : [];
     setProductColors(normalized);
@@ -294,15 +416,26 @@
   watch(productColors, () => {
     lastAppliedColorKey.value = null;
     applySelectedColorToShirtLab();
+    syncCheckoutColor();
   });
 
   watch(() => selectedProductColorIndex.value, () => {
     applySelectedColorToShirtLab();
+    syncCheckoutColor();
   });
 
   watch(() => shirtLabRef.value, (lab) => {
-    if (lab) applySelectedColorToShirtLab();
+    if (lab) {
+      applySelectedColorToShirtLab();
+      syncCheckoutColor();
+    }
   });
+
+  watch(() => selectedProductSize.value, (size) => {
+    checkoutStore.setSize(typeof size === 'string' ? size : null);
+  }, { immediate: true });
+
+  syncCheckoutColor();
 
   function normalizeGrid(value: any) {
     const grid = value || {};
@@ -330,6 +463,18 @@
 
     const colors = Array.isArray(record?.colors) ? record.colors : [];
     const defaultColorId = record?.default_color_id || record?.defaultColorId || record?.defaultColorID;
+    const productSummary: CheckoutProductSummary = {
+      id: String(record?.id ?? record?.style ?? record?.sku ?? record?.code ?? 'admin-product'),
+      name: record?.name ?? record?.productName ?? record?.product_name ?? null,
+      brand: record?.brand ?? record?.brandName ?? null,
+      description: record?.description ?? record?.productDescription ?? record?.product_description ?? null,
+    };
+    checkoutStore.setProduct(productSummary);
+    if (Array.isArray(record?.size_measurements)) {
+      checkoutStore.setSizeMeasurements(record.size_measurements);
+    } else if (Array.isArray(record?.sizeMeasurements)) {
+      checkoutStore.setSizeMeasurements(record.sizeMeasurements);
+    }
     syncProductColors(colors, defaultColorId);
     const primaryColor = colors.find((c: any) => c?.id === defaultColorId) || colors[0] || {};
     const backgrounds = record?.backgrounds || {};
@@ -374,20 +519,63 @@
     gap: 1rem;
   }
 
-  .embed-container {
+  .embed-wrapper {
+    position: relative;
     width: 1440px;
     max-width: 95vw;
-    background-color: aliceblue;
-    height: 560px;
     border-radius: 1rem;
+    overflow: hidden
+  }
+
+  .embed-container {
+    width: 100%;
+    height: 560px;
+
     overflow: hidden;
     display: flex;
     justify-content: center;
     align-items: center;
+    background: aliceblue;
     box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35);
     position: relative;
   }
 
+  .checkout-overlay {
+    position: absolute;
+    top: -1.25rem;
+    right: -1.25rem;
+    width: min(360px, 32vw);
+    pointer-events: none;
+  }
+
+  .checkout-overlay :deep(.checkout-card) {
+    pointer-events: auto;
+  }
+
+  @media (max-width: 1200px) {
+    .checkout-overlay {
+      position: static;
+      width: 100%;
+      margin-top: 1.5rem;
+    }
+
+    .embed-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.5rem;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .embed-container {
+      height: 420px;
+    }
+
+    .checkout-overlay {
+      margin-top: 1rem;
+    }
+  }
 
   .ssa-floating-menu {
     position: fixed;
@@ -420,4 +608,5 @@
   .admin-toggle:active {
     transform: translateY(0);
   }
+
 </style>

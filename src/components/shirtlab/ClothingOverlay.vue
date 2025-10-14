@@ -275,7 +275,7 @@
 
   .clothing-overlay__panel {
     background: #fff;
-    border-radius: 1rem;
+
     width: 100%;
     box-sizing: border-box;
     display: flex;
