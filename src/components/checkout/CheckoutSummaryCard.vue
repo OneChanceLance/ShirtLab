@@ -35,8 +35,11 @@
         <div class="checkout-card__controls">
 
           <div class="checkout-buttons">
-            <button type="button" class="checkout-card__atc" :disabled="!hasVariant" @click="handleAddToCart">
-              {{ hasVariant ? 'Add to cart' : 'Select a product' }}
+            <button type="button" class="checkout-card__atc" :disabled="!hasVariant" @click="handlePrimaryAction">
+              {{ primaryButtonLabel }}
+            </button>
+            <button type="button" class="checkout-card__view" :disabled="cartIsEmpty" @click="handleViewCart">
+              View cart
             </button>
             <button type="button" class="checkout-card__cta" :disabled="cartIsEmpty && !hasVariant"
               @click="handleCheckout">
@@ -47,69 +50,46 @@
       </div>
     </div>
 
-    <div class="checkout-card__cart" v-if="!cartIsEmpty">
-      <div class="cart-summary__header">
-        <h3>Cart ({{ cartItemCount }} {{ cartItemCount === 1 ? 'item' : 'items' }})</h3>
-        <button type="button" class="cart-summary__clear" @click="clearCart">
-          Clear
-        </button>
-      </div>
-      <ul class="cart-summary__list">
-        <li v-for="item in cartItems" :key="item.id" class="cart-item">
-          <div class="cart-item__preview" :class="{ 'has-image': Boolean(item.previewImage) }">
-            <img v-if="item.previewImage" :src="item.previewImage" :alt="cartItemVariantLabel(item)" />
-            <div v-else class="cart-item__placeholder">
-              No preview
-            </div>
-          </div>
-          <div class="cart-item__info">
-            <p class="cart-item__name">{{ item.product?.name ?? 'Selected Product' }}</p>
-            <p class="cart-item__variant">{{ cartItemVariantLabel(item) }}</p>
-            <p v-if="cartItemUnitPriceLabel(item)" class="cart-item__unit">
-              {{ cartItemUnitPriceLabel(item) }} · unit
-            </p>
-          </div>
-          <div class="cart-item__quantity">
-            <button type="button" @click="decrementCartItemQuantity(item)" aria-label="Decrease item quantity">
-              −
-            </button>
-            <input type="number" :min="item.minimumQuantity || 1" :value="item.quantity"
-              @change="onCartItemQuantityChange(item.id, $event)" />
-            <button type="button" @click="incrementCartItemQuantity(item)" aria-label="Increase item quantity">
-              +
-            </button>
-            <p v-if="item.minimumQuantity > 1" class="cart-item__hint">Min {{ item.minimumQuantity }}</p>
-          </div>
-          <div class="cart-item__total">
-            <span>{{ cartItemTotalLabel(item) }}</span>
-            <button type="button" class="cart-item__remove" @click="removeCartItem(item.id)">
-              Remove
-            </button>
-          </div>
-        </li>
-      </ul>
-      <footer class="cart-summary__footer">
-        <span>Subtotal</span>
-        <span>{{ cartSubtotalLabel ?? '—' }}</span>
-      </footer>
-    </div>
+
   </section>
 </template>
 
 <script setup lang="ts">
-  import { computed } from 'vue';
+  import { computed, ref, watch } from 'vue';
   import { storeToRefs } from 'pinia';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
-  import type { CartItem } from '../../stores/cart';
+  import type { AddCartItemPayload, CartItem } from '../../stores/cart';
   import { findMeasurementForSize } from '../../utils/sizeMeasurements';
   import { formatCurrency } from '../../utils/currency';
 
   const checkoutStore = useCheckoutStore();
   const cartStore = useCartStore();
-  const { product, color, size, hasVariant, displayPrice, minimumQuantity, sizeMeasurements } = storeToRefs(checkoutStore);
+  const {
+    product,
+    color,
+    size,
+    hasVariant,
+    displayPrice,
+    minimumQuantity,
+    sizeMeasurements,
+    activeDesignPreview,
+    designPreviews,
+    editingCartItemId,
+    isEditingCartItem,
+  } = storeToRefs(checkoutStore);
+
+  function hashString(input: string): string {
+    let hash = 0;
+    for (let i = 0; i < input.length; i += 1) {
+      hash = ((hash << 5) - hash) + input.charCodeAt(i);
+      hash |= 0;
+    }
+    return (hash >>> 0).toString(16);
+  }
 
   const previewImage = computed<string | null>(() => {
+    if (activeDesignPreview.value) return activeDesignPreview.value;
     const selected = color.value;
     if (!selected) return null;
     return selected.frontUrl || selected.backUrl || selected.sideUrl || null;
@@ -135,6 +115,15 @@
   const colorName = computed(() => color.value?.name || 'Color not selected');
   const sizeLabel = computed(() => size.value || 'Size not selected');
   const priceLabel = computed(() => displayPrice.value);
+
+  const designId = computed(() => {
+    const previews = designPreviews.value;
+    const front = previews?.Front ?? '';
+    const back = previews?.Back ?? '';
+    const raw = `${front}::${back}`;
+    if (!raw.trim()) return null;
+    return `design-${hashString(raw)}`;
+  });
 
   const quantityModel = computed({
     get: () => checkoutStore.quantity,
@@ -162,6 +151,17 @@
     return formatCurrency(total, cartStore.firstCurrency);
   });
 
+  watch(cartItems, (items) => {
+    if (!items.length) {
+      checkoutStore.finishEditingCartItem();
+      return;
+    }
+    const currentId = editingCartItemId.value;
+    if (currentId && !items.some((item) => item.id === currentId)) {
+      checkoutStore.finishEditingCartItem();
+    }
+  });
+
   function incrementQuantity() {
     quantityModel.value = checkoutStore.quantity + 1;
   }
@@ -175,21 +175,75 @@
   function addCurrentSelectionToCart() {
     if (!hasVariant.value) return;
     checkoutStore.ensureMinimumQuantity();
-    cartStore.addItem({
+    const payload = buildCartPayload();
+    cartStore.addItem(payload);
+  }
+
+  const showPrimaryFeedback = ref(false);
+
+  const primaryButtonLabel = computed(() => {
+    if (!hasVariant.value) return 'Select a product';
+    if (showPrimaryFeedback.value) {
+      return isEditingCartItem.value ? 'Item updated!' : 'Added to cart!';
+    }
+    return isEditingCartItem.value ? 'Update item' : 'Add to cart';
+  });
+
+  function clonePayload<T>(value: T): T {
+    if (value === null || value === undefined) return value;
+    try {
+      return structuredClone(value);
+    } catch (error) {
+      return JSON.parse(JSON.stringify(value));
+    }
+  }
+
+  function buildCartPayload(): AddCartItemPayload {
+    const designState = checkoutStore.captureDesignState();
+    return {
       product: product.value ?? null,
       color: color.value ?? null,
       size: size.value ?? null,
+      designId: designId.value,
       quantity: checkoutStore.quantity,
       minimumQuantity: minimumQuantity.value,
       unitPrice: color.value?.price ?? null,
       currency: color.value?.currency ?? null,
       previewImage: previewImage.value,
       measurement: measurementEntry.value,
-    });
+      designState: clonePayload(designState ?? null),
+      clothingDefinition: clonePayload(checkoutStore.clothingDefinition ?? null),
+    };
   }
 
-  function handleAddToCart() {
-    addCurrentSelectionToCart();
+  function updateCurrentSelectionInCart() {
+    const id = editingCartItemId.value;
+    if (!id) return;
+    const payload = buildCartPayload();
+    const nextId = cartStore.updateItem(id, payload);
+    if (nextId) {
+      checkoutStore.setEditingCartItemId(nextId);
+    } else {
+      checkoutStore.finishEditingCartItem();
+    }
+  }
+
+  function handlePrimaryAction() {
+    if (!hasVariant.value) return;
+    checkoutStore.ensureMinimumQuantity();
+    const wasEditing = isEditingCartItem.value;
+    if (wasEditing) {
+      updateCurrentSelectionInCart();
+      checkoutStore.finishEditingCartItem();
+      checkoutStore.setOpen(true);
+    } else {
+      const payload = buildCartPayload();
+      cartStore.addItem(payload);
+    }
+    showPrimaryFeedback.value = true;
+    setTimeout(() => {
+      showPrimaryFeedback.value = false;
+    }, 1200);
   }
 
   function handleCheckout() {
@@ -197,7 +251,15 @@
     if (cartIsEmpty.value && hasVariant.value) {
       addCurrentSelectionToCart();
     }
+    if (isEditingCartItem.value) {
+      updateCurrentSelectionInCart();
+    }
     checkoutStore.setOpen(true);
+  }
+
+  function handleViewCart() {
+    if (cartIsEmpty.value) return;
+    cartStore.openPanel();
   }
 
   function removeCartItem(id: string) {
@@ -263,10 +325,11 @@
   }
 
   .checkout-card__preview {
+
     width: 5rem;
     height: 5rem;
     border-radius: 10px;
-    background: rgba(15, 23, 42, 0.65);
+    background: rgb(255, 255, 255);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -277,7 +340,7 @@
   .checkout-card__preview img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
   }
 
   .checkout-card__placeholder {
@@ -397,7 +460,31 @@
 
   .checkout-card__atc:not(:disabled):hover {
     transform: translateY(-2px);
-    box-shadow: 0 10px 18px rgba(148, 201, 64, 0.45);
+    box-shadow: 0 10px 18px rgba(64, 171, 201, 0.45);
+  }
+
+  .checkout-card__view {
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(148, 163, 184, 0.15);
+    color: #ffffff;
+    cursor: pointer;
+    transition: transform 0.18s ease, box-shadow 0.2s ease, opacity 0.2s ease, background 0.2s ease;
+  }
+
+  .checkout-card__view:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    box-shadow: none;
+  }
+
+  .checkout-card__view:not(:disabled):hover {
+    transform: translateY(-2px);
+    background: rgba(148, 163, 184, 0.28);
+    box-shadow: 0 10px 18px rgba(148, 163, 184, 0.28);
   }
 
   .checkout-buttons {

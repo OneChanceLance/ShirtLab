@@ -1,153 +1,246 @@
 <template>
-  <Teleport to="body">
-    <transition name="checkout-drawer-fade">
-      <div v-if="isOpen" class="checkout-drawer">
-        <div class="checkout-drawer__backdrop" @click.self="close">
-          <section class="checkout-drawer__panel" tabindex="-1" @keydown.esc.prevent="close">
-            <header class="checkout-drawer__header">
-              <div>
-                <h2>Checkout</h2>
-                <p class="checkout-drawer__subtitle">
-                  {{ activeCartItem ? activeProductTitle : 'Review your cart' }}
-                </p>
-              </div>
-              <button type="button" class="checkout-drawer__close" @click="close">
-                Close
-              </button>
-            </header>
+  <transition name="checkout-overlay-fade">
+    <div v-if="isOpen" class="checkout-overlay" role="dialog" aria-modal="true" @click.self="close">
+      <section ref="panelRef" class="checkout-overlay__panel" tabindex="-1" @keydown.esc.prevent="close">
+        <header class="checkout-shell__header">
+          <span class="checkout-shell__eyebrow">Checkout</span>
+          <div class="checkout-shell__actions">
+            <button type="button" class="checkout-shell__back" @click="goBack" :disabled="!canGoBack"
+              :aria-disabled="!canGoBack">
+              Back
+            </button>
+            <span class="checkout-shell__close" @click="close">Close</span>
+          </div>
+        </header>
 
-            <div v-if="hasCartItems" class="checkout-drawer__content">
-              <aside class="checkout-drawer__summary">
-                <div class="checkout-drawer__active">
-                  <div class="checkout-drawer__preview" :class="{ 'has-image': Boolean(activePreviewImage) }">
-                    <img v-if="activePreviewImage" :src="activePreviewImage"
-                      :alt="`Preview of ${activeVariantLabel}`" />
-                    <div v-else class="checkout-drawer__placeholder">
-                      Preview not available
-                    </div>
+        <ul class="checkout-shell__progress" role="list">
+          <li class="checkout-shell__progress-step"
+            :class="{ 'is-active': currentStep === 1, 'is-complete': step1Complete }">
+            <span class="step-index">1</span>
+            <span>Review items</span>
+          </li>
+          <li class="checkout-shell__progress-step"
+            :class="{ 'is-active': currentStep === 2, 'is-complete': step2Complete }">
+            <span class="step-index">2</span>
+            <span>Contact details</span>
+          </li>
+          <li class="checkout-shell__progress-step"
+            :class="{ 'is-active': currentStep === 3, 'is-complete': step3Complete }">
+            <span class="step-index">3</span>
+            <span>Send request</span>
+          </li>
+        </ul>
+
+        <div v-if="hasCartItems" class="checkout-shell__content">
+          <div class="checkout-shell__grid">
+            <main v-if="currentStep === 1" class="checkout-shell__main">
+              <section class="checkout-cart">
+                <header class="checkout-card__header">
+                  <div>
+                    <span>Cart</span>
+                    <span>{{ cartItemCount }} {{ cartItemCount == 1 ? `item` : `items` }}</span>
                   </div>
-
-                  <div class="checkout-drawer__details">
-                    <p class="checkout-drawer__variant">{{ activeVariantLabel }}</p>
-                    <p v-if="activeUnitPriceLabel" class="checkout-drawer__price">{{ activeUnitPriceLabel }}</p>
-                    <p class="checkout-drawer__hint">{{ activeQuantityHint }}</p>
-                    <div class="checkout-drawer__quantity">
-                      <span>Quantity</span>
-                      <div class="checkout-drawer__quantity-input">
-                        <button type="button" @click="decrementActiveQuantity" aria-label="Decrease quantity">
-                          −
-                        </button>
-                        <input type="number" :min="activeMinimumQuantity || 1"
-                          :value="activeCartItem?.quantity ?? (activeMinimumQuantity || 1)"
-                          @change="onActiveQuantityChange" />
-                        <button type="button" @click="incrementActiveQuantity" aria-label="Increase quantity">
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="checkout-drawer__cart-list">
-                  <h3>Items</h3>
-                  <ul>
-                    <li v-for="item in cartItems" :key="item.id"
-                      :class="['checkout-drawer__cart-item', { active: item.id === activeCartItemId }]">
-                      <button type="button" class="checkout-drawer__cart-select" @click="setActiveCartItem(item.id)">
+                  <p>Tap an item to adjust size, color, or quantities.</p>
+                </header>
+                <ul class="checkout-cart__list">
+                  <li v-for="item in cartItems" :key="item.id"
+                    :class="['checkout-cart__item', { active: item.id === activeCartItemId }]">
+                    <button type="button" class="checkout-cart__select" @click="setActiveCartItem(item.id)">
+                      <span class="checkout-cart__thumb" :class="{ 'has-image': Boolean(item.previewImage) }">
+                        <img v-if="item.previewImage" :src="item.previewImage"
+                          :alt="`Preview of ${cartItemVariantLabel(item)}`" />
+                        <span v-else>Preview</span>
+                      </span>
+                      <span class="checkout-cart__copy">
                         <span class="title">{{ item.product?.name ?? 'Selected Product' }}</span>
                         <span class="variant">{{ cartItemVariantLabel(item) }}</span>
                         <span class="qty">Qty {{ item.quantity }}</span>
+                      </span>
+                    </button>
+                    <div class="checkout-cart__actions">
+                      <button type="button" @click="decrementCartItemQuantity(item)"
+                        aria-label="Decrease item quantity">
+                        −
                       </button>
-                      <div class="checkout-drawer__cart-actions">
-                        <button type="button" @click="decrementCartItemQuantity(item)"
-                          aria-label="Decrease item quantity">
-                          −
-                        </button>
-                        <button type="button" @click="incrementCartItemQuantity(item)"
-                          aria-label="Increase item quantity">
-                          +
-                        </button>
-                        <button type="button" class="remove" @click="removeCartItem(item.id)">
-                          Remove
-                        </button>
+                      <button type="button" @click="incrementCartItemQuantity(item)"
+                        aria-label="Increase item quantity">
+                        +
+                      </button>
+                      <button type="button" class="remove" @click="removeCartItem(item.id)">
+                        Remove
+                      </button>
+                    </div>
+                  </li>
+                </ul>
+              </section>
+
+              <section class="checkout-feature">
+                <div class="checkout-feature__media" :class="{ 'has-image': Boolean(activePreviewImage) }">
+                  <img v-if="activePreviewImage" :src="activePreviewImage" :alt="`Preview of ${activeVariantLabel}`" />
+                  <span v-else>Preview</span>
+                </div>
+                <div class="checkout-feature__body">
+                  <div class="checkout-feature__title">
+                    <h3>{{ activeProductTitle }}</h3>
+                    <p>{{ activeVariantLabel }}</p>
+                  </div>
+                  <dl class="checkout-feature__stats">
+                    <div>
+                      <dt>Unit price</dt>
+                      <dd>{{ activeUnitPriceLabel ?? '—' }}</dd>
+                    </div>
+                    <div>
+                      <dt>Minimum</dt>
+                      <dd>{{ activeQuantityHint }}</dd>
+                    </div>
+                    <div>
+                      <dt>Selected size</dt>
+                      <dd>{{ activeMeasurementSizeLabel || '—' }}</dd>
+                    </div>
+                  </dl>
+                  <div class="checkout-feature__quantity">
+                    <span>Quantity</span>
+                    <div class="checkout-quantity-control">
+                      <button type="button" @click="decrementActiveQuantity" aria-label="Decrease quantity">
+                        −
+                      </button>
+                      <input type="number" :min="activeMinimumQuantity || 1"
+                        :value="activeCartItem?.quantity ?? (activeMinimumQuantity || 1)"
+                        @change="onActiveQuantityChange" />
+                      <button type="button" @click="incrementActiveQuantity" aria-label="Increase quantity">
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="activeMeasurements.length" class="checkout-feature__measurements">
+                    <h4>Measurements · {{ activeMeasurementSizeLabel }}</h4>
+                    <dl>
+                      <div v-for="spec in activeMeasurements" :key="spec.key">
+                        <dt>{{ spec.type }}</dt>
+                        <dd>{{ spec.value }} {{ spec.unit }}</dd>
                       </div>
-                    </li>
-                  </ul>
-                  <footer class="checkout-drawer__cart-footer">
-                    <span>Subtotal</span>
-                    <span>{{ cartSubtotalLabel ?? '—' }}</span>
-                  </footer>
-                </div>
-
-                <div v-if="activeMeasurements.length" class="checkout-drawer__measurements">
-                  <h3>Measurements · {{ activeMeasurementSizeLabel }}</h3>
-                  <table>
-                    <tbody>
-                      <tr v-for="spec in activeMeasurements" :key="spec.key">
-                        <th>{{ spec.type }}</th>
-                        <td>{{ spec.value }} {{ spec.unit }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </aside>
-
-              <form class="checkout-form" @submit.prevent="submit">
-                <div class="checkout-form__grid">
-                  <label>
-                    <span>Full name</span>
-                    <input type="text" v-model="fullNameField" placeholder="Alex Taylor" />
-                  </label>
-                  <label>
-                    <span>Email</span>
-                    <input type="email" v-model="emailField" placeholder="alex@example.com" required />
-                  </label>
-                  <label>
-                    <span>Phone</span>
-                    <input type="tel" v-model="phoneField" placeholder="(555) 123-4567" />
-                  </label>
-                  <label>
-                    <span>Company</span>
-                    <input type="text" v-model="companyField" placeholder="Your company" />
-                  </label>
-                  <label class="checkout-form__notes">
-                    <span>Order notes</span>
-                    <textarea rows="4" v-model="notesField"
-                      placeholder="Share artwork details, deadlines, and special requests"></textarea>
-                  </label>
-                </div>
-                <div class="checkout-form__summary">
-                  <div>
-                    <span>Total items</span>
-                    <strong>{{ cartItemCount }}</strong>
-                  </div>
-                  <div>
-                    <span>Subtotal</span>
-                    <strong>{{ cartSubtotalLabel ?? '—' }}</strong>
+                    </dl>
                   </div>
                 </div>
-                <p v-if="checkoutError" class="checkout-form__error">
-                  {{ checkoutError }}
-                </p>
-                <button type="submit" class="checkout-form__submit" :disabled="submitting">
-                  {{ submitting ? 'Submitting…' : 'Request Quote' }}
+              </section>
+            </main>
+
+            <aside class="checkout-shell__aside">
+              <section class="checkout-summary">
+                <header>
+                  <span class="eyebrow">Order summary</span>
+                  <h3>Quote estimate</h3>
+                </header>
+                <dl>
+                  <div>
+                    <dt>Total items</dt>
+                    <dd>{{ cartItemCount }}</dd>
+                  </div>
+                  <div>
+                    <dt>Subtotal</dt>
+                    <dd>{{ cartSubtotalLabel ?? '—' }}</dd>
+                  </div>
+                  <div>
+                    <dt>Active size</dt>
+                    <dd>{{ activeMeasurementSizeLabel || '—' }}</dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section v-if="currentStep === 2" class="checkout-form-card">
+                <header class="checkout-card__header">
+                  <div>
+                    <h3>Contact & project details</h3>
+                    <p>Share how we can reach you to finalize the quote.</p>
+                  </div>
+                </header>
+                <form class="checkout-form" @submit.prevent="submit">
+                  <div class="checkout-form__grid">
+                    <label>
+                      <span>Full name</span>
+                      <input type="text" v-model="fullNameField" placeholder="Alex Taylor" />
+                    </label>
+                    <label>
+                      <span>Email</span>
+                      <input type="email" v-model="emailField" placeholder="alex@example.com" required />
+                    </label>
+                    <label>
+                      <span>Phone</span>
+                      <input type="tel" v-model="phoneField" placeholder="(555) 123-4567" />
+                    </label>
+                    <label>
+                      <span>Company</span>
+                      <input type="text" v-model="companyField" placeholder="Your company" />
+                    </label>
+                    <label class="checkout-form__notes">
+                      <span>Order notes</span>
+                      <textarea rows="4" v-model="notesField"
+                        placeholder="Share artwork details, deadlines, and special requests"></textarea>
+                    </label>
+                  </div>
+                  <div class="checkout-form__summary">
+                    <div>
+                      <span>Total items</span>
+                      <strong>{{ cartItemCount }}</strong>
+                    </div>
+                    <div>
+                      <span>Subtotal</span>
+                      <strong>{{ cartSubtotalLabel ?? '—' }}</strong>
+                    </div>
+                  </div>
+                  <p v-if="checkoutError" class="checkout-form__error">
+                    {{ checkoutError }}
+                  </p>
+                  <button type="submit" class="checkout-form__submit" :disabled="submitting">
+                    {{ submitting ? 'Submitting…' : 'Submit Order' }}
+                  </button>
+                </form>
+              </section>
+
+              <section v-if="currentStep === 1" class="checkout-form-card">
+                <header class="checkout-card__header">
+                  <div>
+                    <h3>Review items</h3>
+                    <p>Make sure sizes, colors, and quantities look right.</p>
+                  </div>
+                </header>
+                <button type="button" class="checkout-form__submit" @click="proceedToContact">
+                  Proceed
                 </button>
-              </form>
-            </div>
+              </section>
 
-            <div v-else class="checkout-drawer__empty">
-              <p>Your cart is empty. Add items to continue.</p>
-              <button type="button" @click="close">Go back</button>
-            </div>
-          </section>
+              <section v-if="currentStep === 3" class="checkout-form-card">
+                <header class="checkout-card__header">
+                  <div>
+                    <h3>Send request</h3>
+                    <p v-if="requestStatus === 'processing'">Redirecting to complete your order…</p>
+                    <p v-else-if="requestStatus === 'success'">Request sent! We’ll follow up by email.</p>
+                    <p v-else-if="requestStatus === 'canceled'">Checkout canceled. You can go back and edit details.</p>
+                    <p v-else-if="requestStatus === 'error'">Something went wrong. Please try again.</p>
+                  </div>
+                </header>
+                <div v-if="requestStatus === 'canceled' || requestStatus === 'error'"
+                  style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                  <button type="button" class="checkout-form__submit" @click="currentStep = 2; requestStatus = 'idle';">
+                    Back to Contact
+                  </button>
+                </div>
+              </section>
+            </aside>
+          </div>
         </div>
-      </div>
-    </transition>
-  </Teleport>
+
+        <div v-else class="checkout-overlay__empty">
+          <p>Your cart is empty. Add items to continue.</p>
+          <button type="button" @click="close">Go back</button>
+        </div>
+      </section>
+    </div>
+  </transition>
 </template>
 
 <script setup lang="ts">
-  import { computed, ref, watch } from 'vue';
+  import { computed, nextTick, ref, watch } from 'vue';
   import { storeToRefs } from 'pinia';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
@@ -169,15 +262,43 @@
   });
 
   const activeCartItemId = ref<string | null>(null);
+  const panelRef = ref<HTMLElement | null>(null);
+
+  type Step = 1 | 2 | 3;
+  const currentStep = ref<Step>(1);
+  const step1Complete = ref(false);
+  const step2Complete = ref(false);
+  const requestStatus = ref<'idle' | 'processing' | 'success' | 'canceled' | 'error'>('idle');
+  const step3Complete = computed(() => requestStatus.value === 'success');
+
+  const canGoBack = computed(() => {
+    if (currentStep.value === 2) return true;
+    if (currentStep.value === 3) return requestStatus.value !== 'processing' && requestStatus.value !== 'success';
+    return false;
+  });
+
+  function goBack() {
+    if (!canGoBack.value) return;
+    if (currentStep.value === 3) {
+      // Return to contact details to edit before resubmitting
+      requestStatus.value = 'idle';
+      currentStep.value = 2;
+      return;
+    }
+    if (currentStep.value === 2) {
+      currentStep.value = 1;
+    }
+  }
 
   watch(cartItems, (items) => {
     if (!items.length) {
       activeCartItemId.value = null;
+      checkoutStore.finishEditingCartItem();
       return;
     }
-    if (!items.some((item) => item.id === activeCartItemId.value)) {
-      activeCartItemId.value = items[0].id;
-    }
+    const current = items.find((item) => item.id === activeCartItemId.value) ?? items[0];
+    activeCartItemId.value = current.id;
+    checkoutStore.beginEditingCartItem(current);
   }, { immediate: true });
 
   const activeCartItem = computed<CartItem | null>(() => {
@@ -222,9 +343,17 @@
   const activeMeasurements = computed(() => activeCartItem.value?.measurement?.specs ?? []);
   const activeMeasurementSizeLabel = computed(() => activeCartItem.value?.measurement?.sizeLabel ?? '');
 
+  function proceedToContact() {
+    if (!hasCartItems.value) return;
+    step1Complete.value = true;
+    currentStep.value = 2;
+  }
+
   function setActiveCartItem(id: string) {
-    if (activeCartItemId.value === id) return;
+    const item = cartItems.value.find((entry) => entry.id === id);
+    if (!item) return;
     activeCartItemId.value = id;
+    checkoutStore.beginEditingCartItem(item);
   }
 
   function incrementActiveQuantity() {
@@ -299,6 +428,11 @@
     set: (value: string) => checkoutStore.updateCustomerField('notes', value),
   });
 
+  const hasContactDetails = computed(() => {
+    const customer = checkoutStore.customer;
+    return Boolean(customer.fullName?.trim() && customer.email?.trim());
+  });
+
   const submitting = ref(false);
   const checkoutError = ref<string | null>(null);
 
@@ -316,6 +450,11 @@
       checkoutError.value = 'Checkout service is not configured. Missing VITE_SUPABASE_URL.';
       return;
     }
+
+    // Mark Step 2 complete and move to Step 3 (sending)
+    step2Complete.value = true;
+    currentStep.value = 3;
+    requestStatus.value = 'processing';
 
     submitting.value = true;
     checkoutError.value = null;
@@ -340,6 +479,7 @@
             size: item.size ?? null,
             cartItemId: item.id,
             minimumQuantity: item.minimumQuantity,
+            designId: item.designId ?? null,
           },
         };
       });
@@ -390,510 +530,843 @@
       const message = error instanceof Error ? error.message : 'Unable to start checkout. Please try again.';
       checkoutError.value = message;
       console.error('[Checkout] Stripe session error', error);
+      requestStatus.value = 'error';
+      currentStep.value = 2;
     } finally {
       submitting.value = false;
     }
   }
 
+  function resetSteps() {
+    currentStep.value = 1;
+    step1Complete.value = false;
+    step2Complete.value = false;
+    requestStatus.value = 'idle';
+  }
+
+  function hydrateFromQuery() {
+    const url = new URL(window.location.href);
+    const state = url.searchParams.get('checkout');
+    if (state === 'success') {
+      step1Complete.value = true;
+      step2Complete.value = true;
+      requestStatus.value = 'success';
+      currentStep.value = 3;
+    } else if (state === 'canceled') {
+      step1Complete.value = true;
+      step2Complete.value = true;
+      requestStatus.value = 'canceled';
+      currentStep.value = 2;
+    }
+  }
+
   function close() {
+    checkoutStore.cancelEditingCartItem();
     checkoutStore.setOpen(false);
   }
+
+  watch(isOpen, (value) => {
+    if (!value) {
+      checkoutStore.cancelEditingCartItem();
+      return;
+    }
+    nextTick(() => {
+      resetSteps();
+      hydrateFromQuery();
+      panelRef.value?.focus();
+    });
+  });
 </script>
 
 <style scoped>
 
-  .checkout-drawer-fade-enter-active,
-  .checkout-drawer-fade-leave-active {
+  .checkout-overlay-fade-enter-active,
+  .checkout-overlay-fade-leave-active {
     transition: opacity 0.25s ease;
   }
 
-  .checkout-drawer-fade-enter-from,
-  .checkout-drawer-fade-leave-to {
+  .checkout-overlay-fade-enter-from,
+  .checkout-overlay-fade-leave-to {
     opacity: 0;
   }
 
-  .checkout-drawer {
-    position: fixed;
+  .checkout-overlay {
+
+    position: absolute;
     inset: 0;
-    z-index: 4000;
+    z-index: 4500;
     display: flex;
-    justify-content: flex-end;
+    justify-content: center;
+    align-items: center;
+
+    background: rgba(15, 23, 42, 0.55);
+    backdrop-filter: blur(6px);
+    overflow: auto;
   }
 
-  .checkout-drawer__backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.72);
-    backdrop-filter: blur(4px);
-  }
-
-  .checkout-drawer__panel {
-    position: absolute;
-    right: 0;
-    top: 0;
-    height: 100%;
-    width: min(560px, 100%);
-    background: #f9fafb;
-    box-shadow: -12px 0 36px rgba(15, 23, 42, 0.3);
+  .checkout-overlay__panel {
+    width: 100%;
+    max-height: calc(100% - clamp(2rem, 6vw, 5rem));
+    background: #fff;
+    box-shadow: 0 45px 80px rgba(15, 23, 42, 0.34);
+    padding: clamp(1.5rem, 3vw, 25rem);
     display: flex;
     flex-direction: column;
-    padding: 1.75rem 2rem;
-    overflow-y: auto;
-    animation: checkout-panel-in 0.28s ease forwards;
+    gap: 1rem;
     color: #0f172a;
+    overflow: hidden;
   }
 
-  .checkout-drawer__header {
+  .checkout-shell__header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
     gap: 1rem;
-    margin-bottom: 1.5rem;
   }
 
-  .checkout-drawer__header h2 {
-    margin: 0;
-    font-size: 1.35rem;
-    font-weight: 600;
-  }
-
-  .checkout-drawer__subtitle {
-    margin: 0.35rem 0 0;
-    font-size: 0.9rem;
-    color: #475569;
-  }
-
-  .checkout-drawer__close {
-    border: none;
-    background: transparent;
-    font-size: 0.9rem;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: #64748b;
-    cursor: pointer;
-    transition: color 0.18s ease;
-  }
-
-  .checkout-drawer__close:hover {
-    color: #0f172a;
-  }
-
-  .checkout-drawer__content {
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
-  }
-
-  .checkout-drawer__summary {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    padding: 1.2rem;
-    background: linear-gradient(135deg, rgba(14, 23, 42, 0.04), rgba(148, 201, 64, 0.08));
-    border-radius: 18px;
-    border: 1px solid rgba(148, 201, 64, 0.18);
-  }
-
-  .checkout-drawer__active {
-    display: flex;
-    gap: 1.25rem;
-    align-items: center;
-  }
-
-  .checkout-drawer__preview {
-    width: 170px;
-    height: 170px;
-    border-radius: 16px;
-    background: rgba(148, 201, 64, 0.12);
-    border: 1px solid rgba(148, 201, 64, 0.18);
-    overflow: hidden;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-  }
-
-  .checkout-drawer__preview img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .checkout-drawer__placeholder {
-    font-size: 0.9rem;
-    color: #475569;
-    text-align: center;
-  }
-
-  .checkout-drawer__details {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    flex: 1;
-  }
-
-  .checkout-drawer__variant {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 600;
-  }
-
-  .checkout-drawer__price {
-    margin: 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: #14532d;
-  }
-
-  .checkout-drawer__hint {
-    margin: 0;
-    font-size: 0.85rem;
-    color: #475569;
-  }
-
-  .checkout-drawer__quantity {
+  .checkout-shell__intro {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
-    font-weight: 600;
-    font-size: 0.9rem;
   }
 
-  .checkout-drawer__quantity span {
+  .checkout-shell__intro h2 {
+    margin: 0;
+    font-size: clamp(1.6rem, 2.6vw, 2rem);
+    font-weight: 600;
+  }
+
+  .checkout-shell__intro p {
+    margin: 0;
+    font-size: 0.94rem;
+    color: #475569;
+  }
+
+  .checkout-shell__eyebrow {
     font-size: 0.78rem;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
+    color: #38bdf8;
+    font-weight: 600;
+  }
+
+  .checkout-shell__close {
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #38bdf8;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .checkout-shell__actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .checkout-shell__back {
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #38bdf8;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+  }
+
+  .checkout-shell__back[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+
+  .checkout-shell__progress {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0.75rem 1.1rem;
+    justify-content: space-between;
+    list-style: none;
+    background: linear-gradient(120deg, rgba(226, 232, 240, 0.45), rgba(248, 250, 252, 0.8));
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+  }
+
+  .checkout-shell__progress-step {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 0.75rem;
     letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: #64748b;
   }
 
-  .checkout-drawer__quantity-input {
+  .checkout-shell__progress-step .step-index {
+    width: 1.85rem;
+    height: 1.85rem;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.25);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #475569;
+  }
+
+  .checkout-shell__progress-step.is-active {
+    color: #0f172a;
+  }
+
+  .checkout-shell__progress-step.is-active .step-index {
+    background: #38bdf8;
+    border-color: #38bdf8;
+    color: #0f172a;
+  }
+
+  .checkout-shell__progress-step.is-complete {
+    color: #16a34a;
+  }
+
+  .checkout-shell__progress-step.is-complete .step-index {
+    background: #bbf7d0;
+    border-color: #16a34a;
+    color: #166534;
+  }
+
+  .checkout-shell__content {
+    flex: 1;
+    min-height: 0;
+    overflow: scroll;
+  }
+
+  .checkout-shell__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.95fr);
+    gap: clamp(1.5rem, 3vw, 2.25rem);
+    align-items: start;
+  }
+
+  .checkout-shell__main,
+  .checkout-shell__aside {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(1.25rem, 2.5vw, 1.75rem);
+  }
+
+  .checkout-feature {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.2fr);
+    gap: clamp(1.1rem, 2vw, 1.5rem);
+    background: linear-gradient(135deg, rgba(236, 252, 203, 0.85), rgba(196, 240, 194, 0.7));
+    border-radius: 1.5rem;
+    border: 1px solid rgba(148, 201, 64, 0.38);
+    padding: clamp(1.25rem, 3vw, 1.75rem);
+    box-shadow: 0 28px 48px rgba(120, 162, 85, 0.24);
+  }
+
+  .checkout-feature__media {
+    position: relative;
+    border-radius: 1.25rem;
+    background: rgba(148, 201, 64, 0.18);
+    border: 1px solid rgba(148, 201, 64, 0.4);
+    aspect-ratio: 1;
     display: flex;
     align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #475569;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    overflow: hidden;
+  }
+
+  .checkout-feature__media.has-image {
+    background: #fff;
+    border-color: rgba(15, 23, 42, 0.08);
+  }
+
+  .checkout-feature__media img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .checkout-feature__body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .checkout-feature__title h3 {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 600;
+  }
+
+  .checkout-feature__title p {
+    margin: 0.35rem 0 0;
+    font-size: 0.95rem;
+    color: #475569;
+  }
+
+  .checkout-feature__stats {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    margin: 0;
+  }
+
+  .checkout-feature__stats>div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding-right: 0.35rem;
+  }
+
+  .checkout-feature__stats dt {
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #0f172a;
+    font-weight: 600;
+  }
+
+  .checkout-feature__stats dd {
+    margin: 0;
+    font-size: 0.95rem;
+    color: #1e293b;
+  }
+
+  .checkout-feature__quantity {
+    display: flex;
+    flex-direction: column;
     gap: 0.5rem;
   }
 
-  .checkout-drawer__quantity-input button {
-    width: 2.2rem;
-    height: 2.2rem;
-    border-radius: 999px;
-    border: none;
-    background: rgba(148, 201, 64, 0.25);
+  .checkout-feature__quantity span {
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: #0f172a;
-    font-size: 1rem;
-    font-weight: 700;
+    font-weight: 600;
+  }
+
+  .checkout-quantity-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: #fff;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.12);
+  }
+
+  .checkout-quantity-control button {
+    border: none;
+    background: rgba(148, 163, 184, 0.18);
+    border-radius: 999px;
+    width: 2.1rem;
+    height: 2.1rem;
+    font-size: 1.2rem;
+    line-height: 1;
+    color: #0f172a;
     cursor: pointer;
-    transition: transform 0.18s ease, background 0.18s ease;
+    transition: background 0.2s ease, transform 0.2s ease;
   }
 
-  .checkout-drawer__quantity-input button:hover {
+  .checkout-quantity-control button:hover {
+    background: rgba(148, 163, 184, 0.26);
     transform: translateY(-1px);
-    background: rgba(148, 201, 64, 0.38);
   }
 
-  .checkout-drawer__quantity-input input {
-    width: 72px;
-    padding: 0.5rem 0.4rem;
-    border-radius: 10px;
-    border: 1px solid #cbd5f5;
-    font-size: 0.95rem;
+  .checkout-quantity-control input {
+    width: 3.25rem;
+    border: none;
+    background: transparent;
     text-align: center;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #0f172a;
   }
 
-  .checkout-drawer__cart-list {
+  .checkout-quantity-control input:focus {
+    outline: none;
+  }
+
+  .checkout-feature__measurements {
+    padding: 1rem;
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.25);
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
   }
 
-  .checkout-drawer__cart-list h3 {
+  .checkout-feature__measurements h4 {
     margin: 0;
     font-size: 0.95rem;
     font-weight: 600;
-    color: #1f2937;
+    color: #0f172a;
   }
 
-  .checkout-drawer__cart-list ul {
+  .checkout-feature__measurements dl {
+    margin: 0;
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .checkout-feature__measurements dt {
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #475569;
+  }
+
+  .checkout-feature__measurements dd {
+    margin: 0.1rem 0 0;
+    font-size: 0.92rem;
+    color: #0f172a;
+  }
+
+  .checkout-card__header {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-start;
+    text-align: left;
+
+    margin-bottom: 1rem;
+  }
+
+  .checkout-card__header span {
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+
+  .checkout-card__header p {
+    margin: 0.35rem 0 0;
+    font-size: 0.85rem;
+    color: #64748b;
+  }
+
+  .checkout-card__header div {
+    display: flex;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .checkout-cart {
+    background: #f8fafc;
+    border-radius: 1.4rem;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    padding: clamp(1.1rem, 2.8vw, 1.6rem);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+  }
+
+
+
+  .checkout-cart__list {
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.9rem;
+    max-height: 320px;
+    overflow-y: auto;
+    padding-right: 0.4rem;
   }
 
-  .checkout-drawer__cart-item {
+  .checkout-cart__item {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
     gap: 0.75rem;
-    padding: 0.75rem;
-    border-radius: 12px;
-    border: 1px solid rgba(148, 201, 64, 0.2);
-    background: rgba(255, 255, 255, 0.65);
+    padding: 0.6rem;
+    border-radius: 1rem;
+    border: 1px solid transparent;
+    transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
   }
 
-  .checkout-drawer__cart-item.active {
-    border-color: rgba(22, 163, 74, 0.55);
-    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.2);
+  .checkout-cart__item:hover {
+    border-color: rgba(59, 130, 246, 0.25);
+    background: rgba(226, 232, 240, 0.45);
   }
 
-  .checkout-drawer__cart-select {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.25rem;
+  .checkout-cart__item.active {
+    border-color: rgba(59, 130, 246, 0.45);
+    background: rgba(59, 130, 246, 0.1);
+    box-shadow: 0 12px 22px rgba(59, 130, 246, 0.2);
+  }
+
+  .checkout-cart__select {
+    flex: 1;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.75rem;
+    align-items: center;
     border: none;
     background: transparent;
     text-align: left;
-    cursor: pointer;
-    flex: 1;
-    color: inherit;
     padding: 0;
+    cursor: pointer;
   }
 
-  .checkout-drawer__cart-select .title {
-    font-size: 0.92rem;
+  .checkout-cart__thumb {
+    width: 5rem;
+    height: 5rem;
+    border-radius: 0.9rem;
+    background: rgba(226, 232, 240, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #475569;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    overflow: hidden;
+  }
+
+  .checkout-cart__thumb.has-image {
+    background: #fff;
+    border-color: rgba(15, 23, 42, 0.08);
+  }
+
+  .checkout-cart__thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .checkout-cart__copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .checkout-cart__copy .title {
+    font-size: 0.95rem;
     font-weight: 600;
     color: #0f172a;
   }
 
-  .checkout-drawer__cart-select .variant {
-    font-size: 0.8rem;
+  .checkout-cart__copy .variant {
+    font-size: 0.84rem;
     color: #475569;
   }
 
-  .checkout-drawer__cart-select .qty {
-    font-size: 0.78rem;
-    color: #14532d;
-    font-weight: 600;
+  .checkout-cart__copy .qty {
+    font-size: 0.75rem;
+    color: #64748b;
   }
 
-  .checkout-drawer__cart-actions {
+  .checkout-cart__actions {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.45rem;
   }
 
-  .checkout-drawer__cart-actions button {
+  .checkout-cart__actions button {
     border: none;
+    background: rgba(148, 163, 184, 0.2);
     border-radius: 999px;
-    padding: 0.35rem 0.7rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-    background: rgba(148, 201, 64, 0.18);
+    padding: 0.4rem 0.7rem;
+    font-size: 0.85rem;
+    font-weight: 500;
     color: #0f172a;
-    transition: background 0.18s ease;
+    cursor: pointer;
+    transition: background 0.2s ease;
   }
 
-  .checkout-drawer__cart-actions button:hover {
-    background: rgba(148, 201, 64, 0.32);
+  .checkout-cart__actions button:hover {
+    background: rgba(148, 163, 184, 0.3);
   }
 
-  .checkout-drawer__cart-actions .remove {
-    background: rgba(248, 113, 113, 0.18);
-    color: #991b1b;
+  .checkout-cart__actions .remove {
+    background: rgba(248, 113, 113, 0.2);
+    color: #b91c1c;
   }
 
-  .checkout-drawer__cart-actions .remove:hover {
+  .checkout-cart__actions .remove:hover {
     background: rgba(248, 113, 113, 0.3);
   }
 
-  .checkout-drawer__cart-footer {
+  .checkout-summary {
+    background: linear-gradient(140deg, rgba(226, 232, 240, 0.6), rgba(148, 163, 184, 0.18));
+    border-radius: 1.4rem;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    padding: clamp(1.1rem, 2.8vw, 1.6rem);
+    box-shadow: 0 20px 36px rgba(15, 23, 42, 0.12);
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .checkout-summary .eyebrow {
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #64748b;
     font-weight: 600;
-    font-size: 0.9rem;
+  }
+
+  .checkout-summary h3 {
+    margin: 0.25rem 0 0;
+    font-size: 1.1rem;
+    font-weight: 600;
     color: #0f172a;
   }
 
-  .checkout-drawer__measurements h3 {
-    margin: 0 0 0.6rem;
-    font-size: 0.95rem;
+  .checkout-summary dl {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  .checkout-summary dl>div {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .checkout-summary dt {
+    font-size: 0.85rem;
+    color: #475569;
+  }
+
+  .checkout-summary dd {
+    margin: 0;
+    font-size: 0.98rem;
     font-weight: 600;
-    color: #1f2937;
+    color: #0f172a;
   }
 
-  .checkout-drawer__measurements table {
-    width: 100%;
-    border-collapse: collapse;
+  .checkout-form-card {
+    background: #fff;
+    border-radius: 1.4rem;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    padding: clamp(1.1rem, 2.8vw, 1.6rem);
+    box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
   }
 
-  .checkout-drawer__measurements th,
-  .checkout-drawer__measurements td {
-    text-align: left;
-    padding: 0.4rem 0;
-    font-size: 0.86rem;
-    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  .checkout-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.4rem;
   }
 
   .checkout-form__grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .checkout-form__grid label {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    font-size: 0.85rem;
-  }
-
-  .checkout-form__grid span {
-    font-size: 0.78rem;
-    text-transform: uppercase;
+    gap: 0.4rem;
+    font-size: 0.76rem;
     letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: #64748b;
+    font-weight: 600;
   }
 
   .checkout-form__grid input,
   .checkout-form__grid textarea {
-    padding: 0.65rem 0.75rem;
-    border-radius: 10px;
-    border: 1px solid #cbd5f5;
-    font-size: 0.95rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 0.9rem;
+    padding: 0.7rem 0.9rem;
+    font-size: 0.96rem;
+    color: #0f172a;
+    background: #fff;
+    box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.08);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .checkout-form__grid input:focus,
+  .checkout-form__grid textarea:focus {
+    outline: none;
+    border-color: rgba(59, 130, 246, 0.55);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  }
+
+  .checkout-form__grid textarea {
+    resize: vertical;
+    min-height: 120px;
   }
 
   .checkout-form__notes {
-    grid-column: span 2;
+    grid-column: 1 / -1;
   }
 
   .checkout-form__summary {
-    margin-top: 1.25rem;
     display: flex;
     justify-content: space-between;
-    align-items: center;
     gap: 1rem;
-    background: rgba(148, 201, 64, 0.1);
-    border: 1px solid rgba(148, 201, 64, 0.2);
-    border-radius: 12px;
-    padding: 0.75rem 1rem;
-    font-size: 0.9rem;
+    padding: 0.9rem 1.1rem;
+    border-radius: 1rem;
+    background: linear-gradient(135deg, rgba(226, 232, 240, 0.45), rgba(248, 250, 252, 0.7));
+    border: 1px solid rgba(148, 163, 184, 0.26);
+  }
+
+  .checkout-form__summary>div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
   }
 
   .checkout-form__summary span {
-    display: block;
-    font-size: 0.78rem;
-    text-transform: uppercase;
+    font-size: 0.75rem;
     letter-spacing: 0.08em;
-    color: #475569;
+    text-transform: uppercase;
+    color: #64748b;
   }
 
   .checkout-form__summary strong {
-    display: block;
-    font-size: 0.98rem;
+    font-size: 1rem;
+    font-weight: 600;
     color: #0f172a;
   }
 
   .checkout-form__error {
-    margin: 0.75rem 0 0;
-    padding: 0.65rem 0.85rem;
-    border-radius: 10px;
-    background: rgba(248, 113, 113, 0.12);
-    border: 1px solid rgba(248, 113, 113, 0.4);
-    color: #991b1b;
+    margin: 0;
+    padding: 0.75rem 1rem;
+    border-radius: 0.9rem;
+    background: rgba(248, 113, 113, 0.14);
+    color: #b91c1c;
     font-size: 0.85rem;
   }
 
   .checkout-form__submit {
-    margin-top: 1.25rem;
-    width: 100%;
-    padding: 0.9rem;
+    align-self: flex-end;
+    padding: 0.8rem 1.85rem;
+    font-size: 0.95rem;
+    font-weight: 600;
     border-radius: 999px;
     border: none;
-    background: linear-gradient(135deg, #9ae67b, #a4f08d);
-    color: #0f172a;
-    font-weight: 600;
-    font-size: 0.95rem;
     cursor: pointer;
-    box-shadow: 0 12px 24px rgba(148, 201, 64, 0.35);
-    transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+    color: #0f172a;
+    background: linear-gradient(135deg, #38bdf8, #22d3ee);
+    box-shadow: 0 25px 45px rgba(45, 197, 253, 0.35);
+    transition: transform 0.2s ease, box-shadow 0.25s ease, opacity 0.2s ease;
   }
 
   .checkout-form__submit:disabled {
-    opacity: 0.6;
     cursor: not-allowed;
+    opacity: 0.5;
     box-shadow: none;
   }
 
   .checkout-form__submit:not(:disabled):hover {
     transform: translateY(-2px);
-    box-shadow: 0 18px 24px rgba(148, 201, 64, 0.45);
+    box-shadow: 0 30px 55px rgba(45, 197, 253, 0.4);
   }
 
-  .checkout-drawer__empty {
+  .checkout-overlay__empty {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
     align-items: center;
-    justify-content: center;
-    padding: 3rem 1rem;
-    color: #475569;
+    gap: 1rem;
+    padding: 4rem 1rem;
     text-align: center;
   }
 
-  .checkout-drawer__empty button {
-    border: none;
-    border-radius: 999px;
-    padding: 0.6rem 1.2rem;
-    background: rgba(148, 201, 64, 0.25);
-    color: #0f172a;
-    cursor: pointer;
-    font-weight: 600;
+  .checkout-overlay__empty p {
+    margin: 0;
+    font-size: 1.05rem;
+    color: #475569;
   }
 
-  @media (max-width: 768px) {
-    .checkout-drawer__panel {
-      padding: 1.5rem 1.25rem;
+  .checkout-overlay__empty button {
+    border: none;
+    background: rgba(148, 163, 184, 0.2);
+    color: #0f172a;
+    padding: 0.6rem 1.3rem;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease;
+  }
+
+  .checkout-overlay__empty button:hover {
+    background: rgba(148, 163, 184, 0.3);
+    transform: translateY(-1px);
+  }
+
+  @media (max-width: 1024px) {
+    .checkout-overlay__panel {
+      max-height: calc(100% - clamp(1.5rem, 6vw, 3.5rem));
     }
 
-    .checkout-drawer__summary {
-      padding: 1rem;
+    .checkout-shell__grid {
+      grid-template-columns: 1fr;
     }
 
-    .checkout-drawer__active {
-      flex-direction: column;
-      align-items: stretch;
+    .checkout-shell__aside {
+      position: relative;
+      top: 0;
     }
 
-    .checkout-drawer__preview {
+    .checkout-cart__list {
+      max-height: none;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .checkout-overlay {
+      padding: clamp(0.75rem, 4vw, 1.5rem);
+    }
+
+    .checkout-overlay__panel {
+      padding: 1.1rem;
+      border-radius: 1.35rem;
+      gap: 1.25rem;
+    }
+
+    .checkout-shell__header h2 {
+      font-size: 1.45rem;
+    }
+
+    .checkout-shell__progress {
+      flex-wrap: wrap;
+      justify-content: space-between;
+    }
+
+    .checkout-feature {
+      grid-template-columns: 1fr;
+    }
+
+    .checkout-feature__media {
       width: 100%;
-      height: 220px;
+      max-width: 280px;
+      margin: 0 auto;
     }
 
-    .checkout-drawer__cart-item {
+    .checkout-card__header {
       flex-direction: column;
-      align-items: stretch;
-    }
-
-    .checkout-drawer__cart-actions {
-      width: 100%;
-      justify-content: flex-end;
     }
 
     .checkout-form__grid {
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: 1fr;
     }
 
-    .checkout-form__notes {
-      grid-column: span 1;
-    }
-
-    .checkout-form__summary {
-      flex-direction: column;
-      align-items: flex-start;
-    }
-  }
-
-  @keyframes checkout-panel-in {
-    from {
-      transform: translateX(30px);
-      opacity: 0;
-    }
-
-    to {
-      transform: translateX(0);
-      opacity: 1;
+    .checkout-form__submit {
+      align-self: stretch;
     }
   }
 </style>
