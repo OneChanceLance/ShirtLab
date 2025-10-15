@@ -1,31 +1,49 @@
 import { defineStore } from 'pinia';
 import type { CheckoutColorSummary, CheckoutProductSummary } from './checkout';
 import type { SizeMeasurementEntry } from '../utils/sizeMeasurements';
+import type { SerializedDesignState } from '../types/designState';
+
+function deepClone<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  try {
+    return structuredClone(value);
+  } catch {
+    return JSON.parse(JSON.stringify(value));
+  }
+}
 
 export interface CartItem {
   id: string;
   product: CheckoutProductSummary | null;
   color: CheckoutColorSummary | null;
   size: string | null;
+  designId: string | null;
   quantity: number;
   minimumQuantity: number;
   unitPrice: number | null;
   currency: string | null;
   previewImage: string | null;
   measurement?: SizeMeasurementEntry;
+  designState: SerializedDesignState | null;
+  clothingDefinition: Record<string, any> | null;
 }
 
 export interface AddCartItemPayload {
   product: CheckoutProductSummary | null;
   color: CheckoutColorSummary | null;
   size: string | null;
+  designId: string | null;
   quantity: number;
   minimumQuantity: number;
   unitPrice: number | null;
   currency: string | null;
   previewImage: string | null;
   measurement?: SizeMeasurementEntry;
+  designState: SerializedDesignState | null;
+  clothingDefinition: Record<string, any> | null;
 }
+
+export type UpdateCartItemPayload = AddCartItemPayload;
 
 function ensureMinimum(quantity: number, minimum: number): number {
   const safeMin = Number.isFinite(minimum) && minimum > 0 ? Math.floor(minimum) : 1;
@@ -37,11 +55,13 @@ function resolveIdentifier(
   productId: string | null | undefined,
   colorId: string | null | undefined,
   size: string | null | undefined,
+  designId: string | null | undefined,
 ): string {
   const productKey = productId ? String(productId) : 'product';
   const colorKey = colorId ? String(colorId) : 'color';
   const sizeKey = size ? String(size) : 'nosize';
-  return `${productKey}::${colorKey}::${sizeKey}`;
+  const designKey = designId ? String(designId) : 'nodesign';
+  return `${productKey}::${colorKey}::${sizeKey}::${designKey}`;
 }
 
 export const useCartStore = defineStore('cart', {
@@ -76,7 +96,12 @@ export const useCartStore = defineStore('cart', {
     addItem(payload: AddCartItemPayload) {
       const minimum = ensureMinimum(payload.minimumQuantity, payload.minimumQuantity);
       const quantityToAdd = ensureMinimum(payload.quantity, minimum);
-      const identifier = resolveIdentifier(payload.product?.id, payload.color?.id, payload.size);
+      const identifier = resolveIdentifier(
+        payload.product?.id,
+        payload.color?.id,
+        payload.size,
+        payload.designId,
+      );
       const existing = this.items.find((entry) => entry.id === identifier);
       if (existing) {
         existing.quantity = ensureMinimum(existing.quantity + quantityToAdd, minimum);
@@ -87,7 +112,10 @@ export const useCartStore = defineStore('cart', {
         existing.product = payload.product;
         existing.color = payload.color;
         existing.size = payload.size ?? null;
+        existing.designId = payload.designId ?? null;
         existing.measurement = payload.measurement;
+        existing.designState = deepClone(payload.designState);
+        existing.clothingDefinition = deepClone(payload.clothingDefinition);
         return;
       }
 
@@ -96,12 +124,15 @@ export const useCartStore = defineStore('cart', {
         product: payload.product,
         color: payload.color,
         size: payload.size ?? null,
+        designId: payload.designId ?? null,
         quantity: quantityToAdd,
         minimumQuantity: minimum,
         unitPrice: payload.unitPrice,
         currency: payload.currency,
         previewImage: payload.previewImage ?? null,
         measurement: payload.measurement,
+        designState: deepClone(payload.designState),
+        clothingDefinition: deepClone(payload.clothingDefinition),
       });
     },
     setItemQuantity(id: string, quantity: number) {
@@ -118,6 +149,58 @@ export const useCartStore = defineStore('cart', {
       if (this.items.length === 0) {
         this.panelOpen = false;
       }
+    },
+    updateItem(existingId: string, payload: UpdateCartItemPayload): string | null {
+      const currentIndex = this.items.findIndex((item) => item.id === existingId);
+      if (currentIndex === -1) {
+        this.addItem(payload);
+        return resolveIdentifier(
+          payload.product?.id,
+          payload.color?.id,
+          payload.size,
+          payload.designId,
+        );
+      }
+
+      const minimum = ensureMinimum(payload.minimumQuantity, payload.minimumQuantity);
+      const quantity = ensureMinimum(payload.quantity, minimum);
+      const nextId = resolveIdentifier(
+        payload.product?.id,
+        payload.color?.id,
+        payload.size,
+        payload.designId,
+      );
+
+      const nextItem: CartItem = {
+        id: nextId,
+        product: payload.product,
+        color: payload.color,
+        size: payload.size ?? null,
+        designId: payload.designId ?? null,
+        quantity,
+        minimumQuantity: minimum,
+        unitPrice: payload.unitPrice,
+        currency: payload.currency,
+        previewImage: payload.previewImage ?? null,
+        measurement: payload.measurement,
+        designState: deepClone(payload.designState),
+        clothingDefinition: deepClone(payload.clothingDefinition),
+      };
+
+      if (nextId === existingId) {
+        this.items.splice(currentIndex, 1, nextItem);
+        return nextId;
+      }
+
+      const duplicateIndex = this.items.findIndex((item) => item.id === nextId);
+      if (duplicateIndex !== -1) {
+        this.items[duplicateIndex] = nextItem;
+        this.items.splice(currentIndex, 1);
+        return nextId;
+      }
+
+      this.items.splice(currentIndex, 1, nextItem);
+      return nextId;
     },
     clear() {
       this.items = [];
@@ -144,6 +227,7 @@ export function buildCartItemId(
   productId: string | null | undefined,
   colorId: string | null | undefined,
   size: string | null | undefined,
+  designId: string | null | undefined,
 ): string {
-  return resolveIdentifier(productId, colorId, size);
+  return resolveIdentifier(productId, colorId, size, designId);
 }

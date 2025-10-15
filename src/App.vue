@@ -5,16 +5,19 @@
         {{ showAdmin ? 'Close Admin' : 'Open Admin Dashboard' }}
       </button>
       <div class="embed-wrapper">
-        <div class="embed-container">
-          <ShirtLab ref="shirtLabRef" :active-menu="activeMenu" @request-menu="handleMenuRequest" />
+        <div>
+          <div class="embed-container">
+            <ShirtLab ref="shirtLabRef" :active-menu="activeMenu" @request-menu="handleMenuRequest" />
 
-          <MenuContent class="menu-overlay" :active-menu="activeMenu" :header-title="headerTitle"
-            :selectedObject="selectedObject" :draw="draw" @closeMenu="() => handleMenuRequest('', '')"
-            @uploadObject="handleUploadObjectFromMenu" @select-clothing="handleSelectClothingFromMenu"
-            @center-text="handleCenterTextFromMenu" @duplicate-text="handleDuplicateTextFromMenu"
-            @bring-forward="handleBringForwardFromMenu" @send-back="handleSendBackFromMenu" />
+            <MenuContent class="menu-overlay" :active-menu="activeMenu" :header-title="headerTitle"
+              :selectedObject="selectedObject" :draw="draw" @closeMenu="() => handleMenuRequest('', '')"
+              @uploadObject="handleUploadObjectFromMenu" @select-clothing="handleSelectClothingFromMenu"
+              @center-text="handleCenterTextFromMenu" @duplicate-text="handleDuplicateTextFromMenu"
+              @bring-forward="handleBringForwardFromMenu" @send-back="handleSendBackFromMenu" />
+          </div>
+          <CheckoutSummaryCard />
         </div>
-        <CheckoutSummaryCard />
+        <CartSlideover />
         <CheckoutDrawer />
       </div>
 
@@ -34,7 +37,6 @@
   import MenuContent from './components/sideMenu/MenuContent.vue';
   import AdminDashboard from './components/admin/AdminDashboard.vue';
   import CheckoutSummaryCard from './components/checkout/CheckoutSummaryCard.vue';
-  import CheckoutDrawer from './components/checkout/CheckoutDrawer.vue';
   import type { ImageObject, TextObject } from './components/shirtlab/types';
   import {
     PRODUCT_COLORS,
@@ -46,6 +48,8 @@
   } from './components/sideMenu/types/colorList';
   import { useCheckoutStore } from './stores/checkout';
   import type { CheckoutColorSummary, CheckoutProductSummary } from './stores/checkout';
+  import CartSlideover from './components/checkout/CartSlideover.vue';
+  import CheckoutDrawer from './components/checkout/CheckoutDrawer.vue';
 
   type ShirtLabExpose = {
     applyExternalClothing(payload: any): void;
@@ -540,17 +544,6 @@
     position: relative;
   }
 
-  .checkout-overlay {
-    position: absolute;
-    top: -1.25rem;
-    right: -1.25rem;
-    width: min(360px, 32vw);
-    pointer-events: none;
-  }
-
-  .checkout-overlay :deep(.checkout-card) {
-    pointer-events: auto;
-  }
 
   @media (max-width: 1200px) {
     .checkout-overlay {
