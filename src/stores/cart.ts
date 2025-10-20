@@ -3,6 +3,10 @@ import type { CheckoutColorSummary, CheckoutProductSummary } from './checkout';
 import type { SizeMeasurementEntry } from '../utils/sizeMeasurements';
 import type { SerializedDesignState } from '../types/designState';
 
+type CartItemDesignView = 'Front' | 'Back';
+
+export type CartItemDesignPreviews = Record<CartItemDesignView, string | null>;
+
 function deepClone<T>(value: T): T {
   if (value === null || value === undefined) return value;
   try {
@@ -23,6 +27,7 @@ export interface CartItem {
   unitPrice: number | null;
   currency: string | null;
   previewImage: string | null;
+  designPreviews: CartItemDesignPreviews;
   measurement?: SizeMeasurementEntry;
   designState: SerializedDesignState | null;
   clothingDefinition: Record<string, any> | null;
@@ -38,6 +43,7 @@ export interface AddCartItemPayload {
   unitPrice: number | null;
   currency: string | null;
   previewImage: string | null;
+  designPreviews?: Partial<CartItemDesignPreviews> | null;
   measurement?: SizeMeasurementEntry;
   designState: SerializedDesignState | null;
   clothingDefinition: Record<string, any> | null;
@@ -62,6 +68,24 @@ function resolveIdentifier(
   const sizeKey = size ? String(size) : 'nosize';
   const designKey = designId ? String(designId) : 'nodesign';
   return `${productKey}::${colorKey}::${sizeKey}::${designKey}`;
+}
+
+function cleanPreview(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function normalizeDesignPreviews(
+  previews: Partial<CartItemDesignPreviews> | null | undefined,
+  fallbackFront: string | null,
+): CartItemDesignPreviews {
+  const front = cleanPreview(previews?.Front) ?? cleanPreview(fallbackFront);
+  const back = cleanPreview(previews?.Back);
+  return {
+    Front: front ?? null,
+    Back: back ?? null,
+  };
 }
 
 export const useCartStore = defineStore('cart', {
@@ -109,6 +133,7 @@ export const useCartStore = defineStore('cart', {
         existing.unitPrice = payload.unitPrice;
         existing.currency = payload.currency;
         existing.previewImage = payload.previewImage;
+        existing.designPreviews = normalizeDesignPreviews(payload.designPreviews, payload.previewImage);
         existing.product = payload.product;
         existing.color = payload.color;
         existing.size = payload.size ?? null;
@@ -130,6 +155,7 @@ export const useCartStore = defineStore('cart', {
         unitPrice: payload.unitPrice,
         currency: payload.currency,
         previewImage: payload.previewImage ?? null,
+        designPreviews: normalizeDesignPreviews(payload.designPreviews, payload.previewImage ?? null),
         measurement: payload.measurement,
         designState: deepClone(payload.designState),
         clothingDefinition: deepClone(payload.clothingDefinition),
@@ -182,6 +208,7 @@ export const useCartStore = defineStore('cart', {
         unitPrice: payload.unitPrice,
         currency: payload.currency,
         previewImage: payload.previewImage ?? null,
+        designPreviews: normalizeDesignPreviews(payload.designPreviews, payload.previewImage ?? null),
         measurement: payload.measurement,
         designState: deepClone(payload.designState),
         clothingDefinition: deepClone(payload.clothingDefinition),

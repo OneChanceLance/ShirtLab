@@ -59,7 +59,7 @@
   import { storeToRefs } from 'pinia';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
-  import type { AddCartItemPayload, CartItem } from '../../stores/cart';
+  import type { AddCartItemPayload, CartItem, CartItemDesignPreviews } from '../../stores/cart';
   import { findMeasurementForSize } from '../../utils/sizeMeasurements';
   import { formatCurrency } from '../../utils/currency';
 
@@ -200,6 +200,11 @@
 
   function buildCartPayload(): AddCartItemPayload {
     const designState = checkoutStore.captureDesignState();
+    const previews = designPreviews.value;
+    const designPreviewPayload: CartItemDesignPreviews = {
+      Front: previews?.Front ?? previewImage.value ?? null,
+      Back: previews?.Back ?? null,
+    };
     return {
       product: product.value ?? null,
       color: color.value ?? null,
@@ -210,6 +215,7 @@
       unitPrice: color.value?.price ?? null,
       currency: color.value?.currency ?? null,
       previewImage: previewImage.value,
+      designPreviews: clonePayload(designPreviewPayload),
       measurement: measurementEntry.value,
       designState: clonePayload(designState ?? null),
       clothingDefinition: clonePayload(checkoutStore.clothingDefinition ?? null),

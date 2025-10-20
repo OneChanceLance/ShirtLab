@@ -142,11 +142,17 @@ import type { CheckoutColorSummary, CheckoutProductSummary } from '../../stores/
     checkoutStore.setDesignState(stateClone);
   }
 
+  function handleOpenClothingPickerRequest(_event?: Event) {
+    openClothingPicker();
+  }
+
   onMounted(() => {
     checkoutStore.registerDesignStateProvider(() => shirtPlacerRef.value?.exportDesignState?.() ?? null);
+    window.addEventListener('shirtlab:open-clothing-picker', handleOpenClothingPickerRequest);
   });
 
   onBeforeUnmount(() => {
+    window.removeEventListener('shirtlab:open-clothing-picker', handleOpenClothingPickerRequest);
     checkoutStore.registerDesignStateProvider(null);
   });
 
