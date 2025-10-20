@@ -28,161 +28,173 @@
             <li class="checkout-shell__progress-step"
               :class="{ 'is-active': currentStep === 3, 'is-complete': step3Complete }">
               <span class="step-index">3</span>
-              <span>Send request</span>
+              <span>Payment Options</span>
             </li>
           </ul>
 
-          <div v-if="hasCartItems">
-            <div class="checkout-shell__content">
-              <div class="checkout-shell__grid">
-                <main v-if="currentStep === 1" class="checkout-shell__main">
-                  <section class="checkout-cart">
-                    <header class="checkout-card__header">
-                      <div>
-                        <span>Cart</span>
-                        <span>{{ cartItemCount }} {{ cartItemCount == 1 ? `item` : `items` }}</span>
+
+          <div v-if="hasCartItems" class="checkout-shell__content">
+            <div class="checkout-shell__grid">
+              <main v-if="currentStep === 1" class="checkout-shell__main">
+                <section class="checkout-cart">
+                  <header class="checkout-card__header">
+                    <div>
+                      <span>Cart</span>
+                      <span>{{ cartItemCount }} {{ cartItemCount == 1 ? `item` : `items` }}</span>
+                    </div>
+                  </header>
+                  <ul class="checkout-cart__list">
+                    <li v-for="item in cartItems" :key="item.id"
+                      :class="['checkout-cart__item', { active: item.id === activeCartItemId }]">
+                      <button type="button" class="checkout-cart__select" @click="selectCartItem(item)"
+                        :aria-pressed="item.id === activeCartItemId">
+                        <span class="checkout-cart__thumb" :class="{ 'has-image': Boolean(item.previewImage) }">
+                          <img v-if="item.previewImage" :src="item.previewImage"
+                            :alt="`Preview of ${cartItemVariantLabel(item)}`" />
+                          <span v-else>Preview</span>
+                        </span>
+                        <span class="checkout-cart__copy">
+                          <span class="title">{{ item.product?.name ?? 'Selected Product' }}</span>
+                          <span class="variant">{{ cartItemVariantLabel(item) }}</span>
+                          <span class="qty">Qty {{ item.quantity }}</span>
+                        </span>
+                      </button>
+                      <div class="checkout-cart__actions">
+                        <button type="button" @click="decrementCartItemQuantity(item)"
+                          aria-label="Decrease item quantity">
+                          −
+                        </button>
+                        <button type="button" @click="incrementCartItemQuantity(item)"
+                          aria-label="Increase item quantity">
+                          +
+                        </button>
+                        <button type="button" class="remove" @click="removeCartItem(item.id)">
+                          Remove
+                        </button>
                       </div>
-                    </header>
-                    <ul class="checkout-cart__list">
-                      <li v-for="item in cartItems" :key="item.id"
-                        :class="['checkout-cart__item', { active: item.id === activeCartItemId }]">
-                        <button type="button" class="checkout-cart__select" @click="selectCartItem(item)"
-                          :aria-pressed="item.id === activeCartItemId">
-                          <span class="checkout-cart__thumb" :class="{ 'has-image': Boolean(item.previewImage) }">
-                            <img v-if="item.previewImage" :src="item.previewImage"
-                              :alt="`Preview of ${cartItemVariantLabel(item)}`" />
-                            <span v-else>Preview</span>
-                          </span>
-                          <span class="checkout-cart__copy">
-                            <span class="title">{{ item.product?.name ?? 'Selected Product' }}</span>
-                            <span class="variant">{{ cartItemVariantLabel(item) }}</span>
-                            <span class="qty">Qty {{ item.quantity }}</span>
-                          </span>
-                        </button>
-                        <div class="checkout-cart__actions">
-                          <button type="button" @click="decrementCartItemQuantity(item)"
-                            aria-label="Decrease item quantity">
-                            −
-                          </button>
-                          <button type="button" @click="incrementCartItemQuantity(item)"
-                            aria-label="Increase item quantity">
-                            +
-                          </button>
-                          <button type="button" class="remove" @click="removeCartItem(item.id)">
-                            Remove
-                          </button>
-                        </div>
-                      </li>
-                      <li :key="'newitem'" class="checkout-cart__item checkout-cart__item--new">
-                        <button type="button" class="checkout-cart__add" aria-label="Add a new item"
-                          @click="handleAddNewItem">
-                          <span class="checkout-cart__add-icon" aria-hidden="true">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" fill="none"
-                              viewBox="0 0 24 24">
-                              <path stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                                stroke-linejoin="round" d="M12 5v14M5 12h14" />
-                            </svg>
-                          </span>
-                          <span class="checkout-cart__add-label">Add another item</span>
-                        </button>
-                      </li>
-                    </ul>
-                  </section>
-                  <section class="checkout-preview" aria-live="polite">
+                    </li>
+                    <li :key="'newitem'" class="checkout-cart__item checkout-cart__item--new">
+                      <button type="button" class="checkout-cart__add" aria-label="Add a new item"
+                        @click="handleAddNewItem">
+                        <span class="checkout-cart__add-icon" aria-hidden="true">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" fill="none"
+                            viewBox="0 0 24 24">
+                            <path stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                              stroke-linejoin="round" d="M12 5v14M5 12h14" />
+                          </svg>
+                        </span>
+                        <span class="checkout-cart__add-label">Add another item</span>
+                      </button>
+                    </li>
+                  </ul>
+                </section>
+                <section class="checkout-preview" aria-live="polite">
+
+                  <div class="checkout-preview__viewer">
+                    <div class="checkout-preview__controls">
+                      <button v-for="view in previewViews" :key="view" type="button" class="checkout-preview__control"
+                        :class="{ active: previewView === view }" :disabled="!previewAvailability[view]"
+                        :aria-pressed="previewView === view" @click="setPreviewView(view)">
+                        {{ viewLabels[view] }}
+                      </button>
+                    </div>
                     <div class="checkout-preview__frame" :class="{ 'has-image': Boolean(activePreviewSrc) }">
                       <img v-if="activePreviewSrc" :src="activePreviewSrc"
                         :alt="`${viewLabels[previewView]} view of ${activeCartItem?.product?.name ?? 'selected item'}`" />
                       <div v-else class="checkout-preview__empty">
                         Select an item to see its preview
                       </div>
-                      <div class="checkout-preview__controls">
-                        <button v-for="view in previewViews" :key="view" type="button" class="checkout-preview__control"
-                          :class="{ active: previewView === view }" :disabled="!previewAvailability[view]"
-                          :aria-pressed="previewView === view" @click="setPreviewView(view)">
-                          {{ viewLabels[view] }}
-                        </button>
-                      </div>
                     </div>
-                  </section>
-                </main>
+                  </div>
 
-
-                <section v-if="currentStep === 2" class="checkout-form-card">
-
-                  <form class="checkout-form" @submit.prevent="submit">
-                    <div class="checkout-form__grid">
-                      <label>
-                        <span>Full name</span>
-                        <input type="text" v-model="fullNameField" placeholder="Alex Taylor" />
-                      </label>
-                      <label>
-                        <span>Email</span>
-                        <input type="email" v-model="emailField" placeholder="alex@example.com" required />
-                      </label>
-                      <label>
-                        <span>Phone</span>
-                        <input type="tel" :value="phoneField" @input="(e => {
-                          var element = e.target as HTMLInputElement;
-                          const digits = element.value.replace(/\D/g, '').slice(0, 10);
-                          let formatted = digits;
-                          if (digits.length > 3 && digits.length <= 6) {
-                            formatted = `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-                          } else if (digits.length > 6) {
-                            formatted = `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-                          }
-                          phoneField = formatted;
-                        })($event)" placeholder="(555) 123-4567" />
-                      </label>
-                      <label>
-                        <span>Company</span>
-                        <input type="text" v-model="companyField" placeholder="Your company" />
-                      </label>
-                      <label class="checkout-form__notes">
-                        <span>Order notes</span>
-                        <textarea rows="4" v-model="notesField"
-                          placeholder="Share artwork details, deadlines, and special requests"></textarea>
-                      </label>
-                    </div>
-                    <div class="checkout-form__summary">
-                      <div>
-                        <span>Total items</span>
-                        <strong>{{ cartItemCount }}</strong>
-                      </div>
-                      <div>
-                        <span>Subtotal</span>
-                        <strong>{{ cartSubtotalLabel ?? '—' }}</strong>
-                      </div>
-                    </div>
-                    <p v-if="checkoutError" class="checkout-form__error">
-                      {{ checkoutError }}
-                    </p>
-                    <button type="submit" class="checkout-form__submit" :disabled="submitting">
-                      {{ submitting ? 'Submitting…' : 'Submit Order' }}
-                    </button>
-                  </form>
                 </section>
-                <section v-if="currentStep === 3" class="checkout-form-card">
-                  <header class="checkout-card__header">
+              </main>
+              <section v-if="currentStep === 2" class="checkout-form-card">
+
+                <form id="checkout-contact-form" class="checkout-form" @submit.prevent="submit">
+                  <div class="checkout-form__grid">
+                    <label>
+                      <span>Full name</span>
+                      <input type="text" v-model="fullNameField" placeholder="Alex Taylor" />
+                    </label>
+                    <label>
+                      <span>Email</span>
+                      <input type="email" v-model="emailField" placeholder="alex@example.com" required />
+                    </label>
+                    <label>
+                      <span>Phone</span>
+                      <input type="tel" :value="phoneField" @input="(e => {
+                        var element = e.target as HTMLInputElement;
+                        const digits = element.value.replace(/\D/g, '').slice(0, 10);
+                        let formatted = digits;
+                        if (digits.length > 3 && digits.length <= 6) {
+                          formatted = `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+                        } else if (digits.length > 6) {
+                          formatted = `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+                        }
+                        phoneField = formatted;
+                      })($event)" placeholder="(555) 123-4567" />
+                    </label>
+                    <label>
+                      <span>Company</span>
+                      <input type="text" v-model="companyField" placeholder="Your company" />
+                    </label>
+                    <label class="checkout-form__notes">
+                      <span>Order notes</span>
+                      <textarea rows="4" v-model="notesField"
+                        placeholder="Share artwork details, deadlines, and special requests"></textarea>
+                    </label>
+                  </div>
+                  <div class="checkout-form__summary">
                     <div>
-                      <h3>Send request</h3>
-                      <p v-if="requestStatus === 'processing'">Redirecting to complete your order…</p>
-                      <p v-else-if="requestStatus === 'success'">Request sent! We’ll follow up by email.</p>
-                      <p v-else-if="requestStatus === 'canceled'">Checkout canceled. You can go back and edit details.
-                      </p>
-                      <p v-else-if="requestStatus === 'error'">Something went wrong. Please try again.</p>
+                      <span>Total items</span>
+                      <strong>{{ cartItemCount }}</strong>
                     </div>
-                  </header>
-                  <div v-if="requestStatus === 'canceled' || requestStatus === 'error'"
-                    style="display:flex; gap:0.5rem; justify-content:flex-end;">
-                    <button type="button" class="checkout-form__submit"
-                      @click="currentStep = 2; requestStatus = 'idle';">
-                      Back to Contact
+                    <div>
+                      <span>Subtotal</span>
+                      <strong>{{ cartSubtotalLabel ?? '—' }}</strong>
+                    </div>
+                  </div>
+                  <p v-if="checkoutError" class="checkout-form__error">
+                    {{ checkoutError }}
+                  </p>
+                </form>
+              </section>
+              <section v-if="currentStep === 3" class="checkout-form-card-striper">
+                <header class="checkout-card__header">
+                  <div>
+                    <p v-if="requestStatus === 'success'">Payment complete! We’ll follow up by email.</p>
+                    <p v-else-if="requestStatus === 'processing'">Confirming your payment…</p>
+                  </div>
+                </header>
+                <template v-if="requestStatus === 'success'">
+                  <div class="checkout-payment__success">
+                    <p>Thanks! Your payment was received. We’ll be in touch shortly with next steps.</p>
+                    <button type="button" class="checkout-form__submit" @click="close">
+                      Close
                     </button>
                   </div>
-                </section>
-              </div>
-            </div>
+                </template>
+                <template v-else>
+                  <div v-if="!stripeConfigured" class="checkout-payment__error">
+                    <p>Payment is unavailable right now. Please contact us to complete your order.</p>
 
+                  </div>
+                  <div v-else class="checkout-payment">
+                    <div class="checkout-payment__element" :class="{ 'is-loading': !paymentElementReady }">
+                      <div ref="paymentElementRef" class="checkout-payment__mount"></div>
+                      <div v-if="!paymentElementReady" class="checkout-payment__loading">
+                        Preparing secure payment form…
+                      </div>
+                    </div>
+                    <p v-if="paymentError" class="checkout-form__error">
+                      {{ paymentError }}
+                    </p>
+
+                  </div>
+                </template>
+              </section>
+            </div>
           </div>
 
           <div v-else>
@@ -208,11 +220,16 @@
               </div>
 
             </div>
-            <button v-if="currentStep == 1" type="button" class="checkout-form__submit" @click="proceedToContact">
+            <button v-if="currentStep === 1" type="button" class="checkout-form__submit" @click="proceedToContact">
               Proceed
             </button>
-            <button v-if="currentStep == 2" type="button" class="checkout-form__submit" @click="proceedToContact">
+            <button v-else-if="currentStep === 2" type="submit" class="checkout-form__submit"
+              form="checkout-contact-form" :disabled="submitting">
               {{ submitting ? 'Submitting…' : 'Submit Order' }}
+            </button>
+            <button v-else-if="currentStep === 3" type="button" class="checkout-form__submit"
+              :disabled="!paymentFormReady || paymentProcessing" @click="confirmPayment">
+              {{ paymentProcessing ? 'Processing…' : 'Pay now' }}
             </button>
           </div>
         </footer>
@@ -222,17 +239,61 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, nextTick, ref, watch } from 'vue';
+  import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
   import { storeToRefs } from 'pinia';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
   import type { CartItem } from '../../stores/cart';
   import { formatCurrency } from '../../utils/currency';
 
+  type StripeConfirmResult = {
+    error?: { message?: string } | null;
+    paymentIntent?: { status?: string | null } | null;
+  };
+
+  interface StripePaymentElement {
+    mount(element: HTMLElement): void;
+    unmount(): void;
+  }
+
+  interface StripeElements {
+    create(component: 'payment', options?: Record<string, unknown>): StripePaymentElement;
+  }
+
+  interface StripeInstance {
+    elements(options: { clientSecret: string; appearance?: Record<string, unknown> }): StripeElements;
+    confirmPayment(options: {
+      elements: StripeElements;
+      confirmParams?: { return_url?: string };
+      redirect?: 'if_required' | 'always';
+    }): Promise<StripeConfirmResult>;
+  }
+
+  declare global {
+    interface Window {
+      Stripe?: (key: string) => StripeInstance;
+    }
+  }
+
+  let stripeScriptPromise: Promise<void> | null = null;
+
   const checkoutStore = useCheckoutStore();
   const cartStore = useCartStore();
   const { isOpen } = storeToRefs(checkoutStore);
   const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '');
+  const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim();
+  const STRIPE_PUBLISHABLE_KEY = (import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string | undefined)?.trim();
+
+  const stripeConfigured = computed(() => Boolean(STRIPE_PUBLISHABLE_KEY));
+
+  const stripeInstance = ref<StripeInstance | null>(null);
+  const stripeElements = ref<StripeElements | null>(null);
+  const paymentElement = ref<StripePaymentElement | null>(null);
+  const paymentElementRef = ref<HTMLDivElement | null>(null);
+  const paymentIntentClientSecret = ref<string | null>(null);
+  const paymentElementReady = ref(false);
+  const paymentProcessing = ref(false);
+  const paymentError = ref<string | null>(null);
 
   const cartItems = computed(() => cartStore.items);
   const hasCartItems = computed(() => cartItems.value.length > 0);
@@ -245,6 +306,141 @@
 
   const activeCartItemId = ref<string | null>(null);
   const panelRef = ref<HTMLElement | null>(null);
+
+  async function loadStripeScript(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    if (typeof window.Stripe === 'function') return;
+    if (!stripeScriptPromise) {
+      stripeScriptPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://js.stripe.com/v3';
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Failed to load Stripe.js'));
+        document.head.appendChild(script);
+      });
+    }
+    await stripeScriptPromise.catch((error) => {
+      stripeScriptPromise = null;
+      throw error;
+    });
+  }
+
+  async function ensureStripe(): Promise<StripeInstance | null> {
+    if (!STRIPE_PUBLISHABLE_KEY) return null;
+    if (stripeInstance.value) return stripeInstance.value;
+    await loadStripeScript();
+    if (typeof window === 'undefined' || typeof window.Stripe !== 'function') {
+      throw new Error('Stripe.js is unavailable.');
+    }
+    stripeInstance.value = window.Stripe(STRIPE_PUBLISHABLE_KEY);
+    return stripeInstance.value;
+  }
+
+  function unmountPaymentElement() {
+    if (paymentElement.value) {
+      try {
+        paymentElement.value.unmount();
+      } catch (error) {
+        console.warn('[Checkout] Failed to unmount payment element', error);
+      }
+    }
+    paymentElement.value = null;
+  }
+
+  function resetPaymentFlow() {
+    paymentProcessing.value = false;
+    paymentError.value = null;
+    paymentElementReady.value = false;
+    paymentIntentClientSecret.value = null;
+    stripeElements.value = null;
+    unmountPaymentElement();
+  }
+
+  async function setupPaymentElement(clientSecret: string) {
+    const stripe = await ensureStripe();
+    if (!stripe) {
+      throw new Error('Stripe is not configured. Missing publishable key.');
+    }
+
+    unmountPaymentElement();
+    paymentElementReady.value = false;
+
+    stripeElements.value = stripe.elements({
+      clientSecret,
+      appearance: {
+        theme: 'flat',
+        variables: {
+          colorPrimary: '#2563eb',
+          colorBackground: '#ffffff',
+          colorText: '#0f172a',
+          borderRadius: '14px',
+        },
+      },
+    });
+
+    if (!stripeElements.value) {
+      throw new Error('Failed to initialize Stripe Elements.');
+    }
+
+    paymentElement.value = stripeElements.value.create('payment', {
+      layout: 'tabs',
+    });
+
+    await nextTick();
+    const mountTarget = paymentElementRef.value;
+    if (!mountTarget) {
+      throw new Error('Payment element mount point is not available.');
+    }
+
+    paymentElement.value.mount(mountTarget);
+    paymentElementReady.value = true;
+  }
+
+  async function confirmPayment() {
+    const stripe = stripeInstance.value ?? await ensureStripe();
+    if (!stripe || !stripeElements.value) {
+      paymentError.value = 'Secure payment form is not ready yet.';
+      return;
+    }
+    paymentProcessing.value = true;
+    paymentError.value = null;
+    requestStatus.value = 'processing';
+
+    const successUrl = new URL(window.location.href);
+    successUrl.searchParams.set('checkout', 'success');
+
+    const { error, paymentIntent } = await stripe.confirmPayment({
+      elements: stripeElements.value,
+      confirmParams: {
+        return_url: successUrl.toString(),
+      },
+      redirect: 'if_required',
+    });
+
+    if (error) {
+      paymentProcessing.value = false;
+      paymentError.value = error.message ?? 'Payment could not be completed.';
+      requestStatus.value = 'error';
+      return;
+    }
+
+    if (paymentIntent && (paymentIntent.status === 'processing' || paymentIntent.status === 'requires_action')) {
+      requestStatus.value = 'processing';
+      paymentProcessing.value = false;
+      return;
+    }
+
+    requestStatus.value = 'success';
+    paymentProcessing.value = false;
+  }
+
+  function goBackToContactFromPayment() {
+    if (paymentProcessing.value) return;
+    resetPaymentFlow();
+    requestStatus.value = 'idle';
+    currentStep.value = 2;
+  }
 
   type Step = 1 | 2 | 3;
   const currentStep = ref<Step>(1);
@@ -276,6 +472,7 @@
     if (!items.length) {
       activeCartItemId.value = null;
       previewView.value = 'Front';
+      resetPaymentFlow();
       checkoutStore.finishEditingCartItem();
       return;
     }
@@ -407,6 +604,7 @@
 
   function handleAddNewItem() {
     checkoutStore.finishEditingCartItem();
+    resetPaymentFlow();
     checkoutStore.setOpen(false);
     nextTick(() => {
       window.dispatchEvent(new CustomEvent('shirtlab:open-clothing-picker'));
@@ -461,12 +659,19 @@
       checkoutError.value = 'Checkout service is not configured. Missing VITE_SUPABASE_URL.';
       return;
     }
+    if (!SUPABASE_ANON_KEY) {
+      checkoutError.value = 'Checkout service is not configured. Missing VITE_SUPABASE_ANON_KEY.';
+      return;
+    }
+    if (!stripeConfigured.value) {
+      checkoutError.value = 'Payment service is not configured. Missing Stripe publishable key.';
+      return;
+    }
 
-    // Mark Step 2 complete and move to Step 3 (sending)
+    resetPaymentFlow();
+
     step2Complete.value = true;
-    currentStep.value = 3;
-    requestStatus.value = 'processing';
-
+    requestStatus.value = 'idle';
     submitting.value = true;
     checkoutError.value = null;
     try {
@@ -504,8 +709,10 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
         },
         body: JSON.stringify({
+          mode: 'payment-intent',
           lineItems,
           customer: {
             name: checkoutStore.customer.fullName || null,
@@ -530,17 +737,20 @@
 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(data?.error ?? 'Unable to start checkout. Please try again.');
+        throw new Error(data?.error ?? 'Unable to start payment. Please try again.');
       }
-      if (!data?.checkoutUrl) {
-        throw new Error('Checkout session was created without a redirect URL.');
+      if (!data?.clientSecret) {
+        throw new Error('Payment could not be initialised. Missing client secret.');
       }
-
-      window.location.href = data.checkoutUrl as string;
+      paymentIntentClientSecret.value = data.clientSecret as string;
+      currentStep.value = 3;
+      paymentError.value = null;
+      await nextTick();
+      await setupPaymentElement(data.clientSecret as string);
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unable to start checkout. Please try again.';
+      const message = error instanceof Error ? error.message : 'Unable to start payment. Please try again.';
       checkoutError.value = message;
-      console.error('[Checkout] Stripe session error', error);
+      console.error('[Checkout] Payment intent error', error);
       requestStatus.value = 'error';
       currentStep.value = 2;
     } finally {
@@ -548,11 +758,14 @@
     }
   }
 
+  const paymentFormReady = computed(() => paymentElementReady.value && Boolean(paymentIntentClientSecret.value));
+
   function resetSteps() {
     currentStep.value = 1;
     step1Complete.value = false;
     step2Complete.value = false;
     requestStatus.value = 'idle';
+    resetPaymentFlow();
   }
 
   function hydrateFromQuery() {
@@ -572,13 +785,22 @@
   }
 
   function close() {
+    resetPaymentFlow();
     checkoutStore.cancelEditingCartItem();
+    if (requestStatus.value === 'success') {
+      cartStore.clear();
+    }
     checkoutStore.setOpen(false);
   }
+
+  onBeforeUnmount(() => {
+    unmountPaymentElement();
+  });
 
   watch(isOpen, (value) => {
     if (!value) {
       checkoutStore.cancelEditingCartItem();
+      resetPaymentFlow();
       return;
     }
     nextTick(() => {
@@ -760,8 +982,8 @@
 
   .checkout-shell__content {
     flex: 1;
-    min-height: 0;
-    overflow: auto;
+    height: 5rem;
+    overflow: scroll;
   }
 
   .checkout-shell__footer {
@@ -809,7 +1031,7 @@
     flex-direction: row;
     width: auto;
     gap: 1rem;
-    height: 90%;
+    height: auto;
   }
 
   .checkout-shell__aside {
@@ -820,21 +1042,39 @@
   }
 
   .checkout-preview {
-    display: block;
+    display: flex;
+    width: 15rem;
     flex-direction: column;
+    gap: 1.1rem;
     background: #fff;
     border-radius: 1.4rem;
     border: 1px solid rgba(148, 163, 184, 0.25);
     padding: clamp(1.1rem, 2.8vw, 1.6rem);
-    padding-top: 0;
-    box-sizing: border-box;
-    overflow: scroll;
-    height: auto;
+    box-shadow: 0 20px 36px rgba(15, 23, 42, 0.12);
   }
 
+  .checkout-preview__header h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #0f172a;
+  }
+
+  .checkout-preview__variant {
+    margin: 0.3rem 0 0;
+    font-size: 0.87rem;
+    color: #475569;
+  }
+
+  .checkout-preview__viewer {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 0.75rem;
+    align-items: stretch;
+  }
 
   .checkout-preview__controls {
-    display: inline-flex;
+    display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
@@ -869,21 +1109,149 @@
   }
 
   .checkout-preview__frame {
-    display: inline-flex;
-    flex-direction: column;
     position: relative;
-
-
-    width: 300px;
-    overflow: scroll;
+    border-radius: 1.1rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(226, 232, 240, 0.2);
+    height: 5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
   }
 
-
+  .checkout-preview__frame.has-image {
+    background: #fff;
+  }
 
   .checkout-preview__frame img {
     width: 100%;
     height: 100%;
     object-fit: contain;
+  }
+
+  .checkout-preview__empty {
+    font-size: 0.9rem;
+    color: #64748b;
+    text-align: center;
+    padding: 1rem;
+  }
+
+  .checkout-preview__meta {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    margin: 0;
+  }
+
+  .checkout-preview__meta div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .checkout-preview__meta dt {
+    margin: 0;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #475569;
+    font-weight: 600;
+  }
+
+  .checkout-preview__meta dd {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #0f172a;
+    font-weight: 500;
+  }
+
+  .checkout-preview__hint {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #64748b;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .checkout-payment {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+
+  .checkout-payment__element {
+    position: relative;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 1.2rem;
+    padding: clamp(1rem, 2.2vw, 1.4rem);
+    background: rgba(248, 250, 252, 0.85);
+    min-height: 140px;
+    display: flex;
+    align-items: center;
+  }
+
+  .checkout-payment__element.is-loading {
+    background: rgba(248, 250, 252, 0.6);
+  }
+
+  .checkout-payment__mount {
+    width: 100%;
+  }
+
+  .checkout-payment__loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    color: #64748b;
+    pointer-events: none;
+  }
+
+  .checkout-payment__actions {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .checkout-form__secondary {
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    background: transparent;
+    color: #1e293b;
+    border-radius: 999px;
+    padding: 0.65rem 1.6rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .checkout-form__secondary:hover:not(:disabled) {
+    background: rgba(226, 232, 240, 0.45);
+  }
+
+  .checkout-form__secondary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .checkout-payment__error,
+  .checkout-payment__success {
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+  }
+
+  .checkout-payment__error p,
+  .checkout-payment__success p {
+    margin: 0;
+    font-size: 0.95rem;
+    color: #475569;
   }
 
   .checkout-feature {
@@ -1347,12 +1715,21 @@
 
   .checkout-form-card {
     background: #fff;
-    border-radius: 1.4rem;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    padding: clamp(1.1rem, 2.8vw, 1.6rem);
-    box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+
+
+
+
     overflow: scroll;
-    margin-bottom: 5rem;
+    margin-bottom: -1rem;
+  }
+
+  .checkout-form-card-striper {
+    background: #fff;
+
+
+
+    overflow: scroll;
+    margin-bottom: -1rem;
   }
 
   .checkout-form {

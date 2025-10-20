@@ -32,6 +32,7 @@ interface CheckoutRequestPayload {
   metadata?: Record<string, unknown> | null;
   successUrl?: string | null;
   cancelUrl?: string | null;
+  mode?: "checkout-session" | "payment-intent";
 }
 
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY");
@@ -197,6 +198,55 @@ serve(async (req) => {
     cartItemCount: payload.cartSummary?.itemCount ?? null,
     cartUniqueCount: payload.cartSummary?.uniqueCount ?? null,
   });
+
+  const mode = payload.mode === "payment-intent" ? "payment-intent" : "checkout-session";
+
+  if (mode === "payment-intent") {
+    if (!lineItems.length) {
+      return jsonResponse({ error: "No valid line items were provided." }, 400);
+    }
+
+    const firstCurrency = lineItems[0].price_data?.currency ?? "usd";
+    const hasMixedCurrency = lineItems.some((item) => item.price_data?.currency !== firstCurrency);
+    if (hasMixedCurrency) {
+      return jsonResponse({ error: "All line items must use the same currency." }, 400);
+    }
+
+    let amount = 0;
+    for (const item of lineItems) {
+      const qty = Math.max(1, Math.floor(item.quantity ?? 1));
+      const unitAmount = Math.floor(item.price_data?.unit_amount ?? 0);
+      if (!Number.isFinite(unitAmount) || unitAmount <= 0) {
+        continue;
+      }
+      amount += qty * unitAmount;
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return jsonResponse({ error: "Unable to determine payment amount." }, 400);
+    }
+
+    try {
+      const intent = await stripe.paymentIntents.create({
+        amount,
+        currency: firstCurrency,
+        metadata: sessionMetadata,
+        receipt_email: customerEmail,
+        description: `ShirtLab checkout - ${lineItems.length} item(s)`,
+        automatic_payment_methods: { enabled: true },
+      });
+
+      return jsonResponse({
+        paymentIntentId: intent.id,
+        clientSecret: intent.client_secret,
+        amount,
+        currency: firstCurrency,
+      });
+    } catch (error) {
+      console.error("[Stripe] Failed to create PaymentIntent", error);
+      return jsonResponse({ error: "Unable to start payment. Please try again." }, 500);
+    }
+  }
 
   try {
     const session = await stripe.checkout.sessions.create({
