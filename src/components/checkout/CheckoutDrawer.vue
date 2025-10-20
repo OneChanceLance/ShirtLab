@@ -1,240 +1,222 @@
 <template>
   <transition name="checkout-overlay-fade">
     <div v-if="isOpen" class="checkout-overlay" role="dialog" aria-modal="true" @click.self="close">
-      <section ref="panelRef" class="checkout-overlay__panel" tabindex="-1" @keydown.esc.prevent="close">
-        <header class="checkout-shell__header">
-          <span class="checkout-shell__eyebrow">Checkout</span>
-          <div class="checkout-shell__actions">
-            <button type="button" class="checkout-shell__back" @click="goBack" :disabled="!canGoBack"
-              :aria-disabled="!canGoBack">
+      <div class="checkout-overlay__container">
+        <div ref="panelRef" class="checkout-overlay__panel" tabindex="-1" @keydown.esc.prevent="close">
+          <header class="checkout-shell__header">
+            <span class="checkout-shell__eyebrow">Checkout</span>
+            <div class="checkout-shell__actions">
+              <button type="button" class="checkout-shell__back" @click="goBack" :disabled="!canGoBack"
+                :aria-disabled="!canGoBack">
+                Back
+              </button>
+              <span class="checkout-shell__close" @click="close">Close</span>
+            </div>
+          </header>
+
+          <ul class="checkout-shell__progress" role="list">
+            <li class="checkout-shell__progress-step"
+              :class="{ 'is-active': currentStep === 1, 'is-complete': step1Complete }">
+              <span class="step-index">1</span>
+              <span>Review items</span>
+            </li>
+            <li class="checkout-shell__progress-step"
+              :class="{ 'is-active': currentStep === 2, 'is-complete': step2Complete }">
+              <span class="step-index">2</span>
+              <span>Contact details</span>
+            </li>
+            <li class="checkout-shell__progress-step"
+              :class="{ 'is-active': currentStep === 3, 'is-complete': step3Complete }">
+              <span class="step-index">3</span>
+              <span>Send request</span>
+            </li>
+          </ul>
+
+          <div v-if="hasCartItems">
+            <div class="checkout-shell__content">
+              <div class="checkout-shell__grid">
+                <main v-if="currentStep === 1" class="checkout-shell__main">
+                  <section class="checkout-cart">
+                    <header class="checkout-card__header">
+                      <div>
+                        <span>Cart</span>
+                        <span>{{ cartItemCount }} {{ cartItemCount == 1 ? `item` : `items` }}</span>
+                      </div>
+                    </header>
+                    <ul class="checkout-cart__list">
+                      <li v-for="item in cartItems" :key="item.id"
+                        :class="['checkout-cart__item', { active: item.id === activeCartItemId }]">
+                        <button type="button" class="checkout-cart__select" @click="selectCartItem(item)"
+                          :aria-pressed="item.id === activeCartItemId">
+                          <span class="checkout-cart__thumb" :class="{ 'has-image': Boolean(item.previewImage) }">
+                            <img v-if="item.previewImage" :src="item.previewImage"
+                              :alt="`Preview of ${cartItemVariantLabel(item)}`" />
+                            <span v-else>Preview</span>
+                          </span>
+                          <span class="checkout-cart__copy">
+                            <span class="title">{{ item.product?.name ?? 'Selected Product' }}</span>
+                            <span class="variant">{{ cartItemVariantLabel(item) }}</span>
+                            <span class="qty">Qty {{ item.quantity }}</span>
+                          </span>
+                        </button>
+                        <div class="checkout-cart__actions">
+                          <button type="button" @click="decrementCartItemQuantity(item)"
+                            aria-label="Decrease item quantity">
+                            −
+                          </button>
+                          <button type="button" @click="incrementCartItemQuantity(item)"
+                            aria-label="Increase item quantity">
+                            +
+                          </button>
+                          <button type="button" class="remove" @click="removeCartItem(item.id)">
+                            Remove
+                          </button>
+                        </div>
+                      </li>
+                      <li :key="'newitem'" class="checkout-cart__item checkout-cart__item--new">
+                        <button type="button" class="checkout-cart__add" aria-label="Add a new item"
+                          @click="handleAddNewItem">
+                          <span class="checkout-cart__add-icon" aria-hidden="true">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" fill="none"
+                              viewBox="0 0 24 24">
+                              <path stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                                stroke-linejoin="round" d="M12 5v14M5 12h14" />
+                            </svg>
+                          </span>
+                          <span class="checkout-cart__add-label">Add another item</span>
+                        </button>
+                      </li>
+                    </ul>
+                  </section>
+                  <section class="checkout-preview" aria-live="polite">
+                    <div class="checkout-preview__frame" :class="{ 'has-image': Boolean(activePreviewSrc) }">
+                      <img v-if="activePreviewSrc" :src="activePreviewSrc"
+                        :alt="`${viewLabels[previewView]} view of ${activeCartItem?.product?.name ?? 'selected item'}`" />
+                      <div v-else class="checkout-preview__empty">
+                        Select an item to see its preview
+                      </div>
+                      <div class="checkout-preview__controls">
+                        <button v-for="view in previewViews" :key="view" type="button" class="checkout-preview__control"
+                          :class="{ active: previewView === view }" :disabled="!previewAvailability[view]"
+                          :aria-pressed="previewView === view" @click="setPreviewView(view)">
+                          {{ viewLabels[view] }}
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                </main>
+
+
+                <section v-if="currentStep === 2" class="checkout-form-card">
+
+                  <form class="checkout-form" @submit.prevent="submit">
+                    <div class="checkout-form__grid">
+                      <label>
+                        <span>Full name</span>
+                        <input type="text" v-model="fullNameField" placeholder="Alex Taylor" />
+                      </label>
+                      <label>
+                        <span>Email</span>
+                        <input type="email" v-model="emailField" placeholder="alex@example.com" required />
+                      </label>
+                      <label>
+                        <span>Phone</span>
+                        <input type="tel" :value="phoneField" @input="(e => {
+                          var element = e.target as HTMLInputElement;
+                          const digits = element.value.replace(/\D/g, '').slice(0, 10);
+                          let formatted = digits;
+                          if (digits.length > 3 && digits.length <= 6) {
+                            formatted = `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+                          } else if (digits.length > 6) {
+                            formatted = `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+                          }
+                          phoneField = formatted;
+                        })($event)" placeholder="(555) 123-4567" />
+                      </label>
+                      <label>
+                        <span>Company</span>
+                        <input type="text" v-model="companyField" placeholder="Your company" />
+                      </label>
+                      <label class="checkout-form__notes">
+                        <span>Order notes</span>
+                        <textarea rows="4" v-model="notesField"
+                          placeholder="Share artwork details, deadlines, and special requests"></textarea>
+                      </label>
+                    </div>
+                    <div class="checkout-form__summary">
+                      <div>
+                        <span>Total items</span>
+                        <strong>{{ cartItemCount }}</strong>
+                      </div>
+                      <div>
+                        <span>Subtotal</span>
+                        <strong>{{ cartSubtotalLabel ?? '—' }}</strong>
+                      </div>
+                    </div>
+                    <p v-if="checkoutError" class="checkout-form__error">
+                      {{ checkoutError }}
+                    </p>
+                    <button type="submit" class="checkout-form__submit" :disabled="submitting">
+                      {{ submitting ? 'Submitting…' : 'Submit Order' }}
+                    </button>
+                  </form>
+                </section>
+                <section v-if="currentStep === 3" class="checkout-form-card">
+                  <header class="checkout-card__header">
+                    <div>
+                      <h3>Send request</h3>
+                      <p v-if="requestStatus === 'processing'">Redirecting to complete your order…</p>
+                      <p v-else-if="requestStatus === 'success'">Request sent! We’ll follow up by email.</p>
+                      <p v-else-if="requestStatus === 'canceled'">Checkout canceled. You can go back and edit details.
+                      </p>
+                      <p v-else-if="requestStatus === 'error'">Something went wrong. Please try again.</p>
+                    </div>
+                  </header>
+                  <div v-if="requestStatus === 'canceled' || requestStatus === 'error'"
+                    style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                    <button type="button" class="checkout-form__submit"
+                      @click="currentStep = 2; requestStatus = 'idle';">
+                      Back to Contact
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </div>
+
+          </div>
+
+          <div v-else>
+            <div class="checkout-overlay__empty">
+              <p>Your cart is empty. Add items to continue.</p>
+              <button type="button" @click="close">Go back</button>
+            </div>
+          </div>
+        </div>
+        <footer v-if="hasCartItems" class="checkout-shell__footer">
+          <div class="checkout-shell__footer-actions">
+            <button type="button" class="checkout-form__submit" @click="goBack" :disabled="!canGoBack">
               Back
             </button>
-            <span class="checkout-shell__close" @click="close">Close</span>
+            <div class="details">
+              <div>
+                <span>Total items</span>
+                <span>{{ cartItemCount }}</span>
+              </div>
+              <div>
+                <span>Subtotal</span>
+                <span>{{ cartSubtotalLabel ?? '—' }}</span>
+              </div>
+
+            </div>
+            <button v-if="currentStep == 1" type="button" class="checkout-form__submit" @click="proceedToContact">
+              Proceed
+            </button>
+            <button v-if="currentStep == 2" type="button" class="checkout-form__submit" @click="proceedToContact">
+              {{ submitting ? 'Submitting…' : 'Submit Order' }}
+            </button>
           </div>
-        </header>
-
-        <ul class="checkout-shell__progress" role="list">
-          <li class="checkout-shell__progress-step"
-            :class="{ 'is-active': currentStep === 1, 'is-complete': step1Complete }">
-            <span class="step-index">1</span>
-            <span>Review items</span>
-          </li>
-          <li class="checkout-shell__progress-step"
-            :class="{ 'is-active': currentStep === 2, 'is-complete': step2Complete }">
-            <span class="step-index">2</span>
-            <span>Contact details</span>
-          </li>
-          <li class="checkout-shell__progress-step"
-            :class="{ 'is-active': currentStep === 3, 'is-complete': step3Complete }">
-            <span class="step-index">3</span>
-            <span>Send request</span>
-          </li>
-        </ul>
-
-        <div v-if="hasCartItems" class="checkout-shell__content">
-          <div class="checkout-shell__grid">
-            <main v-if="currentStep === 1" class="checkout-shell__main">
-              <section class="checkout-cart">
-                <header class="checkout-card__header">
-                  <div>
-                    <span>Cart</span>
-                    <span>{{ cartItemCount }} {{ cartItemCount == 1 ? `item` : `items` }}</span>
-                  </div>
-                  <p>Tap an item to adjust size, color, or quantities.</p>
-                </header>
-                <ul class="checkout-cart__list">
-                  <li v-for="item in cartItems" :key="item.id"
-                    :class="['checkout-cart__item', { active: item.id === activeCartItemId }]">
-                    <button type="button" class="checkout-cart__select" @click="setActiveCartItem(item.id)">
-                      <span class="checkout-cart__thumb" :class="{ 'has-image': Boolean(item.previewImage) }">
-                        <img v-if="item.previewImage" :src="item.previewImage"
-                          :alt="`Preview of ${cartItemVariantLabel(item)}`" />
-                        <span v-else>Preview</span>
-                      </span>
-                      <span class="checkout-cart__copy">
-                        <span class="title">{{ item.product?.name ?? 'Selected Product' }}</span>
-                        <span class="variant">{{ cartItemVariantLabel(item) }}</span>
-                        <span class="qty">Qty {{ item.quantity }}</span>
-                      </span>
-                    </button>
-                    <div class="checkout-cart__actions">
-                      <button type="button" @click="decrementCartItemQuantity(item)"
-                        aria-label="Decrease item quantity">
-                        −
-                      </button>
-                      <button type="button" @click="incrementCartItemQuantity(item)"
-                        aria-label="Increase item quantity">
-                        +
-                      </button>
-                      <button type="button" class="remove" @click="removeCartItem(item.id)">
-                        Remove
-                      </button>
-                    </div>
-                  </li>
-                </ul>
-              </section>
-
-              <section class="checkout-feature">
-                <div class="checkout-feature__media" :class="{ 'has-image': Boolean(activePreviewImage) }">
-                  <img v-if="activePreviewImage" :src="activePreviewImage" :alt="`Preview of ${activeVariantLabel}`" />
-                  <span v-else>Preview</span>
-                </div>
-                <div class="checkout-feature__body">
-                  <div class="checkout-feature__title">
-                    <h3>{{ activeProductTitle }}</h3>
-                    <p>{{ activeVariantLabel }}</p>
-                  </div>
-                  <dl class="checkout-feature__stats">
-                    <div>
-                      <dt>Unit price</dt>
-                      <dd>{{ activeUnitPriceLabel ?? '—' }}</dd>
-                    </div>
-                    <div>
-                      <dt>Minimum</dt>
-                      <dd>{{ activeQuantityHint }}</dd>
-                    </div>
-                    <div>
-                      <dt>Selected size</dt>
-                      <dd>{{ activeMeasurementSizeLabel || '—' }}</dd>
-                    </div>
-                  </dl>
-                  <div class="checkout-feature__quantity">
-                    <span>Quantity</span>
-                    <div class="checkout-quantity-control">
-                      <button type="button" @click="decrementActiveQuantity" aria-label="Decrease quantity">
-                        −
-                      </button>
-                      <input type="number" :min="activeMinimumQuantity || 1"
-                        :value="activeCartItem?.quantity ?? (activeMinimumQuantity || 1)"
-                        @change="onActiveQuantityChange" />
-                      <button type="button" @click="incrementActiveQuantity" aria-label="Increase quantity">
-                        +
-                      </button>
-                    </div>
-                  </div>
-                  <div v-if="activeMeasurements.length" class="checkout-feature__measurements">
-                    <h4>Measurements · {{ activeMeasurementSizeLabel }}</h4>
-                    <dl>
-                      <div v-for="spec in activeMeasurements" :key="spec.key">
-                        <dt>{{ spec.type }}</dt>
-                        <dd>{{ spec.value }} {{ spec.unit }}</dd>
-                      </div>
-                    </dl>
-                  </div>
-                </div>
-              </section>
-            </main>
-
-            <aside class="checkout-shell__aside">
-              <section class="checkout-summary">
-                <header>
-                  <span class="eyebrow">Order summary</span>
-                  <h3>Quote estimate</h3>
-                </header>
-                <dl>
-                  <div>
-                    <dt>Total items</dt>
-                    <dd>{{ cartItemCount }}</dd>
-                  </div>
-                  <div>
-                    <dt>Subtotal</dt>
-                    <dd>{{ cartSubtotalLabel ?? '—' }}</dd>
-                  </div>
-                  <div>
-                    <dt>Active size</dt>
-                    <dd>{{ activeMeasurementSizeLabel || '—' }}</dd>
-                  </div>
-                </dl>
-              </section>
-
-              <section v-if="currentStep === 2" class="checkout-form-card">
-                <header class="checkout-card__header">
-                  <div>
-                    <h3>Contact & project details</h3>
-                    <p>Share how we can reach you to finalize the quote.</p>
-                  </div>
-                </header>
-                <form class="checkout-form" @submit.prevent="submit">
-                  <div class="checkout-form__grid">
-                    <label>
-                      <span>Full name</span>
-                      <input type="text" v-model="fullNameField" placeholder="Alex Taylor" />
-                    </label>
-                    <label>
-                      <span>Email</span>
-                      <input type="email" v-model="emailField" placeholder="alex@example.com" required />
-                    </label>
-                    <label>
-                      <span>Phone</span>
-                      <input type="tel" v-model="phoneField" placeholder="(555) 123-4567" />
-                    </label>
-                    <label>
-                      <span>Company</span>
-                      <input type="text" v-model="companyField" placeholder="Your company" />
-                    </label>
-                    <label class="checkout-form__notes">
-                      <span>Order notes</span>
-                      <textarea rows="4" v-model="notesField"
-                        placeholder="Share artwork details, deadlines, and special requests"></textarea>
-                    </label>
-                  </div>
-                  <div class="checkout-form__summary">
-                    <div>
-                      <span>Total items</span>
-                      <strong>{{ cartItemCount }}</strong>
-                    </div>
-                    <div>
-                      <span>Subtotal</span>
-                      <strong>{{ cartSubtotalLabel ?? '—' }}</strong>
-                    </div>
-                  </div>
-                  <p v-if="checkoutError" class="checkout-form__error">
-                    {{ checkoutError }}
-                  </p>
-                  <button type="submit" class="checkout-form__submit" :disabled="submitting">
-                    {{ submitting ? 'Submitting…' : 'Submit Order' }}
-                  </button>
-                </form>
-              </section>
-
-              <section v-if="currentStep === 1" class="checkout-form-card">
-                <header class="checkout-card__header">
-                  <div>
-                    <h3>Review items</h3>
-                    <p>Make sure sizes, colors, and quantities look right.</p>
-                  </div>
-                </header>
-                <button type="button" class="checkout-form__submit" @click="proceedToContact">
-                  Proceed
-                </button>
-              </section>
-
-              <section v-if="currentStep === 3" class="checkout-form-card">
-                <header class="checkout-card__header">
-                  <div>
-                    <h3>Send request</h3>
-                    <p v-if="requestStatus === 'processing'">Redirecting to complete your order…</p>
-                    <p v-else-if="requestStatus === 'success'">Request sent! We’ll follow up by email.</p>
-                    <p v-else-if="requestStatus === 'canceled'">Checkout canceled. You can go back and edit details.</p>
-                    <p v-else-if="requestStatus === 'error'">Something went wrong. Please try again.</p>
-                  </div>
-                </header>
-                <div v-if="requestStatus === 'canceled' || requestStatus === 'error'"
-                  style="display:flex; gap:0.5rem; justify-content:flex-end;">
-                  <button type="button" class="checkout-form__submit" @click="currentStep = 2; requestStatus = 'idle';">
-                    Back to Contact
-                  </button>
-                </div>
-              </section>
-            </aside>
-          </div>
-        </div>
-
-        <div v-else class="checkout-overlay__empty">
-          <p>Your cart is empty. Add items to continue.</p>
-          <button type="button" @click="close">Go back</button>
-        </div>
-      </section>
+        </footer>
+      </div>
     </div>
   </transition>
 </template>
@@ -289,16 +271,16 @@
       currentStep.value = 1;
     }
   }
-
+  const previewView = ref<PreviewView>('Front');
   watch(cartItems, (items) => {
     if (!items.length) {
       activeCartItemId.value = null;
+      previewView.value = 'Front';
       checkoutStore.finishEditingCartItem();
       return;
     }
     const current = items.find((item) => item.id === activeCartItemId.value) ?? items[0];
-    activeCartItemId.value = current.id;
-    checkoutStore.beginEditingCartItem(current);
+    focusCartItem(current);
   }, { immediate: true });
 
   const activeCartItem = computed<CartItem | null>(() => {
@@ -307,16 +289,59 @@
     return existing ?? cartItems.value[0];
   });
 
-  const activeProductTitle = computed(() => {
-    const product = activeCartItem.value?.product;
-    if (!product) return 'Selected Product';
-    const brand = product.brand?.trim();
-    const name = product.name?.trim();
-    if (brand && name) return `${brand} · ${name}`;
-    return brand || name || 'Selected Product';
-  });
+  const previewViews = ['Front', 'Back'] as const;
+  type PreviewView = typeof previewViews[number];
+  const viewLabels: Record<PreviewView, string> = {
+    Front: 'Front',
+    Back: 'Back',
+  };
 
-  const activePreviewImage = computed(() => activeCartItem.value?.previewImage ?? null);
+
+  function normalizePreview(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : null;
+  }
+
+  function resolvePreviewSources(item: CartItem | null): Record<PreviewView, string | null> {
+    if (!item) {
+      return { Front: null, Back: null };
+    }
+    const designPreviews = item.designPreviews ?? { Front: null, Back: null };
+    const color = item.color;
+    const frontFallback = normalizePreview(item.previewImage)
+      ?? normalizePreview(color?.frontUrl)
+      ?? normalizePreview(color?.sideUrl);
+    const backFallback = normalizePreview(color?.backUrl)
+      ?? normalizePreview(color?.frontUrl)
+      ?? normalizePreview(color?.sideUrl)
+      ?? frontFallback;
+    return {
+      Front: normalizePreview(designPreviews.Front) ?? frontFallback ?? null,
+      Back: normalizePreview(designPreviews.Back) ?? backFallback ?? null,
+    };
+  }
+
+  const previewSources = computed(() => resolvePreviewSources(activeCartItem.value));
+  const previewAvailability = computed<Record<PreviewView, boolean>>(() => ({
+    Front: Boolean(previewSources.value.Front),
+    Back: Boolean(previewSources.value.Back),
+  }));
+  const activePreviewSrc = computed(() => previewSources.value[previewView.value] ?? null);
+
+  function determineInitialPreviewView(item: CartItem | null): PreviewView {
+    const sources = resolvePreviewSources(item);
+    if (sources.Front) return 'Front';
+    if (sources.Back) return 'Back';
+    return 'Front';
+  }
+
+  watch(previewSources, (sources) => {
+    if (!sources[previewView.value]) {
+      const fallback = previewViews.find((view) => sources[view]) ?? 'Front';
+      previewView.value = fallback;
+    }
+  }, { immediate: true });
 
   const activeVariantLabel = computed(() => {
     const item = activeCartItem.value;
@@ -340,8 +365,6 @@
     return `Minimum order: ${min} pcs`;
   });
 
-  const activeMeasurements = computed(() => activeCartItem.value?.measurement?.specs ?? []);
-  const activeMeasurementSizeLabel = computed(() => activeCartItem.value?.measurement?.sizeLabel ?? '');
 
   function proceedToContact() {
     if (!hasCartItems.value) return;
@@ -349,37 +372,7 @@
     currentStep.value = 2;
   }
 
-  function setActiveCartItem(id: string) {
-    const item = cartItems.value.find((entry) => entry.id === id);
-    if (!item) return;
-    activeCartItemId.value = id;
-    checkoutStore.beginEditingCartItem(item);
-  }
 
-  function incrementActiveQuantity() {
-    const item = activeCartItem.value;
-    if (!item) return;
-    cartStore.setItemQuantity(item.id, item.quantity + 1);
-  }
-
-  function decrementActiveQuantity() {
-    const item = activeCartItem.value;
-    if (!item) return;
-    if (item.quantity <= item.minimumQuantity) {
-      cartStore.removeItem(item.id);
-      return;
-    }
-    cartStore.setItemQuantity(item.id, item.quantity - 1);
-  }
-
-  function onActiveQuantityChange(event: Event) {
-    const item = activeCartItem.value;
-    if (!item) return;
-    const target = event.target as HTMLInputElement | null;
-    if (!target) return;
-    const value = Number(target.value);
-    cartStore.setItemQuantity(item.id, value);
-  }
 
   function incrementCartItemQuantity(item: CartItem) {
     cartStore.setItemQuantity(item.id, item.quantity + 1);
@@ -395,6 +388,29 @@
 
   function removeCartItem(id: string) {
     cartStore.removeItem(id);
+  }
+
+  function focusCartItem(item: CartItem) {
+    activeCartItemId.value = item.id;
+    checkoutStore.beginEditingCartItem(item);
+    previewView.value = determineInitialPreviewView(item);
+  }
+
+  function selectCartItem(item: CartItem) {
+    focusCartItem(item);
+  }
+
+  function setPreviewView(view: PreviewView) {
+    if (!previewAvailability.value[view]) return;
+    previewView.value = view;
+  }
+
+  function handleAddNewItem() {
+    checkoutStore.finishEditingCartItem();
+    checkoutStore.setOpen(false);
+    nextTick(() => {
+      window.dispatchEvent(new CustomEvent('shirtlab:open-clothing-picker'));
+    });
   }
 
   function cartItemVariantLabel(item: CartItem): string {
@@ -426,11 +442,6 @@
   const notesField = computed({
     get: () => checkoutStore.customer.notes,
     set: (value: string) => checkoutStore.updateCustomerField('notes', value),
-  });
-
-  const hasContactDetails = computed(() => {
-    const customer = checkoutStore.customer;
-    return Boolean(customer.fullName?.trim() && customer.email?.trim());
   });
 
   const submitting = ref(false);
@@ -578,7 +589,7 @@
   });
 </script>
 
-<style scoped>
+<style scoped lang="scss">
 
   .checkout-overlay-fade-enter-active,
   .checkout-overlay-fade-leave-active {
@@ -591,7 +602,6 @@
   }
 
   .checkout-overlay {
-
     position: absolute;
     inset: 0;
     z-index: 4500;
@@ -601,20 +611,29 @@
 
     background: rgba(15, 23, 42, 0.55);
     backdrop-filter: blur(6px);
-    overflow: auto;
+    overflow: hidden;
+  }
+
+  .checkout-overlay__container {
+    height: 100%;
+    width: 100%;
+    background: #fff;
+    box-shadow: 0 45px 80px rgba(15, 23, 42, 0.34);
+
+    display: flex;
+    flex-direction: column;
+
+    color: #0f172a;
   }
 
   .checkout-overlay__panel {
-    width: 100%;
-    max-height: calc(100% - clamp(2rem, 6vw, 5rem));
-    background: #fff;
-    box-shadow: 0 45px 80px rgba(15, 23, 42, 0.34);
-    padding: clamp(1.5rem, 3vw, 25rem);
+    padding: clamp(1.5rem, 3vw, 2.5rem);
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    color: #0f172a;
     overflow: hidden;
+    flex: 1 1 auto;
+
   }
 
   .checkout-shell__header {
@@ -742,21 +761,129 @@
   .checkout-shell__content {
     flex: 1;
     min-height: 0;
-    overflow: scroll;
+    overflow: auto;
+  }
+
+  .checkout-shell__footer {
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    background: linear-gradient(180deg, rgba(248, 250, 252, 0.85), #fff);
+    display: flex;
+    position: relative;
+    z-index: 1;
+    padding: 0.5rem;
+    flex-shrink: 0;
+
+  }
+
+  .checkout-shell__footer-actions {
+
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+
+    .details {
+      display: flex;
+      gap: 2rem;
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      text-align: center;
+
+      div {
+        display: flex;
+        flex-direction: column;
+      }
+    }
   }
 
   .checkout-shell__grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.95fr);
+
     gap: clamp(1.5rem, 3vw, 2.25rem);
     align-items: start;
   }
 
-  .checkout-shell__main,
+  .checkout-shell__main {
+    display: flex;
+    flex-direction: row;
+    width: auto;
+    gap: 1rem;
+    height: 90%;
+  }
+
   .checkout-shell__aside {
     display: flex;
+    flex-direction: row;
+    width: auto;
+    gap: 1rem;
+  }
+
+  .checkout-preview {
+    display: block;
     flex-direction: column;
-    gap: clamp(1.25rem, 2.5vw, 1.75rem);
+    background: #fff;
+    border-radius: 1.4rem;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    padding: clamp(1.1rem, 2.8vw, 1.6rem);
+    padding-top: 0;
+    box-sizing: border-box;
+    overflow: scroll;
+    height: auto;
+  }
+
+
+  .checkout-preview__controls {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .checkout-preview__control {
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    background: rgba(226, 232, 240, 0.35);
+    color: #0f172a;
+    border-radius: 999px;
+    padding: 0.35rem 0.9rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  }
+
+  .checkout-preview__control:hover:not(:disabled) {
+    background: rgba(226, 232, 240, 0.55);
+  }
+
+  .checkout-preview__control:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .checkout-preview__control.active {
+    background: rgba(59, 130, 246, 0.18);
+    border-color: rgba(59, 130, 246, 0.45);
+    color: #1d4ed8;
+  }
+
+  .checkout-preview__frame {
+    display: inline-flex;
+    flex-direction: column;
+    position: relative;
+
+
+    width: 300px;
+    overflow: scroll;
+  }
+
+
+
+  .checkout-preview__frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
   }
 
   .checkout-feature {
@@ -972,7 +1099,8 @@
     border-radius: 1.4rem;
     border: 1px solid rgba(148, 163, 184, 0.25);
     padding: clamp(1.1rem, 2.8vw, 1.6rem);
-    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+
+    flex-grow: 1;
   }
 
 
@@ -1009,6 +1137,67 @@
     border-color: rgba(59, 130, 246, 0.45);
     background: rgba(59, 130, 246, 0.1);
     box-shadow: 0 12px 22px rgba(59, 130, 246, 0.2);
+  }
+
+  .checkout-cart__item--new {
+    padding: 0.85rem;
+    justify-content: center;
+    border: 1.5px dashed rgba(148, 163, 184, 0.65);
+    background: rgba(226, 232, 240, 0.35);
+    transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .checkout-cart__item--new:hover {
+    border-color: rgba(59, 130, 246, 0.6);
+    background: rgba(59, 130, 246, 0.12);
+    box-shadow: 0 14px 24px rgba(59, 130, 246, 0.14);
+  }
+
+  .checkout-cart__add {
+    width: 100%;
+    border: none;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65rem;
+    padding: 0.5rem;
+    cursor: pointer;
+    color: #0f172a;
+    text-align: center;
+  }
+
+  .checkout-cart__add:focus-visible {
+    outline: 2px solid #38bdf8;
+    outline-offset: 3px;
+  }
+
+  .checkout-cart__add-icon {
+    width: 3.2rem;
+    height: 3.2rem;
+    border-radius: 999px;
+    background: #38bdf8;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #0f172a;
+    box-shadow: 0 12px 22px rgba(56, 189, 248, 0.25);
+    transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
+  }
+
+  .checkout-cart__item--new:hover .checkout-cart__add-icon {
+    transform: translateY(-2px);
+    background: #0ea5e9;
+    color: #f8fafc;
+  }
+
+  .checkout-cart__add-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #475569;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .checkout-cart__select {
@@ -1112,7 +1301,7 @@
     padding: clamp(1.1rem, 2.8vw, 1.6rem);
     box-shadow: 0 20px 36px rgba(15, 23, 42, 0.12);
     display: flex;
-    flex-direction: column;
+
     gap: 1.25rem;
   }
 
@@ -1162,11 +1351,13 @@
     border: 1px solid rgba(148, 163, 184, 0.25);
     padding: clamp(1.1rem, 2.8vw, 1.6rem);
     box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+    overflow: scroll;
+    margin-bottom: 5rem;
   }
 
   .checkout-form {
     display: flex;
-    flex-direction: column;
+
     gap: 1.4rem;
   }
 
@@ -1256,26 +1447,31 @@
   .checkout-form__submit {
     align-self: flex-end;
     padding: 0.8rem 1.85rem;
-    font-size: 0.95rem;
-    font-weight: 600;
-    border-radius: 999px;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 800;
+    box-sizing: border-box;
+
+    border-radius: 10px;
     border: none;
     cursor: pointer;
-    color: #0f172a;
-    background: linear-gradient(135deg, #38bdf8, #22d3ee);
-    box-shadow: 0 25px 45px rgba(45, 197, 253, 0.35);
+    color: rgb(255, 255, 255);
+    height: 100%;
+    background: linear-gradient(135deg, rgb(206, 245, 135), #8e2);
     transition: transform 0.2s ease, box-shadow 0.25s ease, opacity 0.2s ease;
+    box-sizing: border-box;
   }
 
   .checkout-form__submit:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
+    cursor: default;
     box-shadow: none;
+    opacity: 0;
   }
 
   .checkout-form__submit:not(:disabled):hover {
     transform: translateY(-2px);
-    box-shadow: 0 30px 55px rgba(45, 197, 253, 0.4);
+    box-shadow: 0 30px 55px rgba(135, 253, 45, 0.4);
   }
 
   .checkout-overlay__empty {
@@ -1309,7 +1505,7 @@
   }
 
   @media (max-width: 1024px) {
-    .checkout-overlay__panel {
+    .checkout-overlay__container {
       max-height: calc(100% - clamp(1.5rem, 6vw, 3.5rem));
     }
 
@@ -1332,9 +1528,12 @@
       padding: clamp(0.75rem, 4vw, 1.5rem);
     }
 
+    .checkout-overlay__container {
+      border-radius: 1.35rem;
+    }
+
     .checkout-overlay__panel {
       padding: 1.1rem;
-      border-radius: 1.35rem;
       gap: 1.25rem;
     }
 

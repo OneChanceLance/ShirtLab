@@ -191,8 +191,17 @@ export const useCheckoutStore = defineStore('checkout', {
         : 1;
       this.quantity = safeQuantity;
       this.sizeMeasurements = item.measurement ? [item.measurement] : [];
-      if (item.previewImage) {
-        this.setDesignPreview('Front', item.previewImage);
+      this.resetDesignPreviews();
+      const normalizePreview = (value: string | null | undefined) =>
+        (typeof value === 'string' && value.trim().length ? value : null);
+      const storedPreviews = item.designPreviews ?? { Front: null, Back: null };
+      const frontPreview = normalizePreview(storedPreviews.Front) ?? normalizePreview(item.previewImage);
+      const backPreview = normalizePreview(storedPreviews.Back);
+      if (frontPreview) {
+        this.setDesignPreview('Front', frontPreview);
+      }
+      if (backPreview) {
+        this.setDesignPreview('Back', backPreview);
       }
       this.ensureMinimumQuantity();
       const baselineDesign = item.designState ? cloneValue(item.designState) : null;
