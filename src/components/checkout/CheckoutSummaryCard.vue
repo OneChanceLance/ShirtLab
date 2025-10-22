@@ -62,6 +62,7 @@
   import type { AddCartItemPayload, CartItem, CartItemDesignPreviews } from '../../stores/cart';
   import { findMeasurementForSize } from '../../utils/sizeMeasurements';
   import { formatCurrency } from '../../utils/currency';
+  import { calculatePricing } from '../../utils/pricing';
 
   const checkoutStore = useCheckoutStore();
   const cartStore = useCartStore();
@@ -70,7 +71,6 @@
     color,
     size,
     hasVariant,
-    displayPrice,
     minimumQuantity,
     sizeMeasurements,
     activeDesignPreview,
@@ -114,7 +114,44 @@
 
   const colorName = computed(() => color.value?.name || 'Color not selected');
   const sizeLabel = computed(() => size.value || 'Size not selected');
-  const priceLabel = computed(() => displayPrice.value);
+  function buildDesignPreviewPayload(): CartItemDesignPreviews {
+    const previews = designPreviews.value;
+    return {
+      Front: previews?.Front ?? previewImage.value ?? null,
+      Back: previews?.Back ?? null,
+    };
+  }
+
+  const ENABLE_PRICING_LOGS = true;
+
+  function pricingLogger(message: string, details?: Record<string, unknown>) {
+    if (!ENABLE_PRICING_LOGS) return;
+    if (details) {
+      console.log(`[Pricing] ${message}`, details);
+    } else {
+      console.log(`[Pricing] ${message}`);
+    }
+  }
+
+  function evaluateCurrentPricing(log = false) {
+    const designState = checkoutStore.captureDesignState();
+    const previews = buildDesignPreviewPayload();
+    return calculatePricing({
+      basePrice: color.value?.price ?? null,
+      designState: designState ?? null,
+      designPreviews: previews,
+      clothingDefinition: checkoutStore.clothingDefinition ?? null,
+      quantity: checkoutStore.quantity,
+      logger: log ? pricingLogger : undefined,
+    });
+  }
+
+  const previewPricing = computed(() => evaluateCurrentPricing(ENABLE_PRICING_LOGS));
+
+  const priceLabel = computed(() => {
+    const currency = color.value?.currency ?? cartStore.firstCurrency ?? 'USD';
+    return formatCurrency(previewPricing.value.finalUnitPrice, currency);
+  });
 
   const designId = computed(() => {
     const previews = designPreviews.value;
@@ -200,11 +237,16 @@
 
   function buildCartPayload(): AddCartItemPayload {
     const designState = checkoutStore.captureDesignState();
-    const previews = designPreviews.value;
-    const designPreviewPayload: CartItemDesignPreviews = {
-      Front: previews?.Front ?? previewImage.value ?? null,
-      Back: previews?.Back ?? null,
-    };
+    const designPreviewPayload = buildDesignPreviewPayload();
+
+    const breakdown = calculatePricing({
+      basePrice: color.value?.price ?? null,
+      designState: designState ?? null,
+      designPreviews: designPreviewPayload,
+      clothingDefinition: checkoutStore.clothingDefinition ?? null,
+      quantity: checkoutStore.quantity,
+    });
+
     return {
       product: product.value ?? null,
       color: color.value ?? null,
@@ -212,7 +254,7 @@
       designId: designId.value,
       quantity: checkoutStore.quantity,
       minimumQuantity: minimumQuantity.value,
-      unitPrice: color.value?.price ?? null,
+      unitPrice: breakdown.finalUnitPrice,
       currency: color.value?.currency ?? null,
       previewImage: previewImage.value,
       designPreviews: clonePayload(designPreviewPayload),
