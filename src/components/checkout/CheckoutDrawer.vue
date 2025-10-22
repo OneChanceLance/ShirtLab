@@ -151,10 +151,38 @@
                       <strong>{{ cartItemCount }}</strong>
                     </div>
                     <div>
-                      <span>Subtotal</span>
-                      <strong>{{ cartSubtotalLabel ?? '—' }}</strong>
+                      <span>Garment subtotal</span>
+                      <strong>{{ cartPricingSummary.baseLabel ?? '—' }}</strong>
+                    </div>
+                    <div>
+                      <span>Design charges</span>
+                      <strong>{{ cartPricingSummary.designLabel ?? '—' }}</strong>
+                    </div>
+                    <div v-if="cartPricingSummary.hasDiscount">
+                      <span>Quantity discounts</span>
+                      <strong>-{{ cartPricingSummary.discountLabel ?? '—' }}</strong>
+                    </div>
+                    <div>
+                      <span>Estimated total</span>
+                      <strong>{{ cartPricingSummary.finalLabel ?? cartSubtotalLabel ?? '—' }}</strong>
                     </div>
                   </div>
+                  <ul v-if="cartPricingDetails.length" class="checkout-form__summary-details">
+                    <li v-for="detail in cartPricingDetails" :key="detail.item.id">
+                      <div class="summary-details__header">
+                        <span>{{ detail.item.product?.name ?? 'Custom apparel' }}</span>
+                        <span>× {{ detail.item.quantity }}</span>
+                      </div>
+                      <div class="summary-details__breakout">
+                        <span>Base {{ detail.formatted.basePerUnit ?? '—' }}</span>
+                        <span>Design {{ detail.formatted.designPerUnit ?? '—' }}</span>
+                        <span v-if="detail.breakdown.quantityDiscount">
+                          Discount −{{ detail.formatted.discountPerUnit ?? '—' }} ({{ detail.breakdown.quantityDiscount?.type }})
+                        </span>
+                        <span>Total {{ detail.formatted.unitPrice ?? '—' }}</span>
+                      </div>
+                    </li>
+                  </ul>
                   <p v-if="checkoutError" class="checkout-form__error">
                     {{ checkoutError }}
                   </p>
@@ -245,6 +273,9 @@
   import { useCartStore } from '../../stores/cart';
   import type { CartItem } from '../../stores/cart';
   import { formatCurrency } from '../../utils/currency';
+  import { calculatePricing } from '../../utils/pricing';
+  import { supabase } from '../../supabase';
+  import type { DesignViewName, SerializedDesignState } from '../../types/designState';
 
   type StripeConfirmResult = {
     error?: { message?: string } | null;
@@ -283,6 +314,8 @@
   const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '');
   const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim();
   const STRIPE_PUBLISHABLE_KEY = (import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string | undefined)?.trim();
+  const ORDER_PREVIEWS_BUCKET = (import.meta.env.VITE_SUPABASE_ORDER_PREVIEWS_BUCKET as string | undefined)?.trim() || 'order-previews';
+  const ORDER_DESIGNS_BUCKET = (import.meta.env.VITE_SUPABASE_ORDER_DESIGNS_BUCKET as string | undefined)?.trim() || 'order-design-assets';
 
   const stripeConfigured = computed(() => Boolean(STRIPE_PUBLISHABLE_KEY));
 
@@ -294,6 +327,9 @@
   const paymentElementReady = ref(false);
   const paymentProcessing = ref(false);
   const paymentError = ref<string | null>(null);
+  const orderRecording = ref(false);
+  const orderRecorded = ref(false);
+  const storageUploadCache = new Map<string, string>();
 
   const cartItems = computed(() => cartStore.items);
   const hasCartItems = computed(() => cartItems.value.length > 0);
@@ -302,6 +338,84 @@
     const total = cartStore.subtotal;
     if (!Number.isFinite(total) || total <= 0) return null;
     return formatCurrency(total, cartStore.firstCurrency);
+  });
+  const cartPricingDetails = computed(() => {
+    const fallbackCurrency = cartStore.firstCurrency ?? 'USD';
+    return cartItems.value.map((item) => {
+      const breakdown = calculatePricing({
+        basePrice: item.color?.price ?? null,
+        designState: item.designState ?? null,
+        designPreviews: item.designPreviews ?? { Front: null, Back: null },
+        clothingDefinition: item.clothingDefinition ?? null,
+        quantity: item.quantity,
+      });
+      const currency = item.currency ?? fallbackCurrency;
+      return {
+        item,
+        breakdown,
+        currency,
+        formatted: {
+          basePerUnit: formatCurrency(breakdown.basePrice, currency),
+          designPerUnit: formatCurrency(breakdown.designChargeTotal, currency),
+          discountPerUnit: breakdown.quantityDiscount
+            ? formatCurrency(breakdown.quantityDiscount.amountPerUnit, currency)
+            : null,
+          unitPrice: formatCurrency(breakdown.finalUnitPrice, currency),
+        },
+      };
+    });
+  });
+  const cartPricingSummary = computed(() => {
+    const details = cartPricingDetails.value;
+    if (!details.length) {
+      const currency = cartStore.firstCurrency ?? 'USD';
+      return {
+        baseTotal: 0,
+        designTotal: 0,
+        discountTotal: 0,
+        finalTotal: 0,
+        subtotal: 0,
+        currency,
+        baseLabel: formatCurrency(0, currency),
+        designLabel: formatCurrency(0, currency),
+        discountLabel: null,
+        finalLabel: formatCurrency(0, currency),
+        subtotalLabel: formatCurrency(0, currency),
+        hasDiscount: false,
+      };
+    }
+    let baseTotal = 0;
+    let designTotal = 0;
+    let discountTotal = 0;
+    let finalTotal = 0;
+    let currency = cartStore.firstCurrency ?? 'USD';
+    details.forEach(({ item, breakdown, currency: itemCurrency }) => {
+      const quantity = Math.max(1, Math.floor(item.quantity));
+      baseTotal += breakdown.basePrice * quantity;
+      designTotal += breakdown.designChargeTotal * quantity;
+      finalTotal += breakdown.finalUnitPrice * quantity;
+      if (breakdown.quantityDiscount) {
+        discountTotal += breakdown.quantityDiscount.amountPerUnit * quantity;
+      }
+      if (itemCurrency) {
+        currency = itemCurrency;
+      }
+    });
+    const subtotal = baseTotal + designTotal;
+    return {
+      baseTotal,
+      designTotal,
+      discountTotal,
+      finalTotal,
+      subtotal,
+      currency,
+      baseLabel: formatCurrency(baseTotal, currency),
+      designLabel: formatCurrency(designTotal, currency),
+      discountLabel: discountTotal ? formatCurrency(Math.abs(discountTotal), currency) : null,
+      finalLabel: formatCurrency(finalTotal, currency),
+      subtotalLabel: formatCurrency(subtotal, currency),
+      hasDiscount: discountTotal > 0,
+    };
   });
 
   const activeCartItemId = ref<string | null>(null);
@@ -355,6 +469,375 @@
     paymentIntentClientSecret.value = null;
     stripeElements.value = null;
     unmountPaymentElement();
+  }
+
+  function cloneSerializable<T>(value: T): T {
+    try {
+      return structuredClone(value);
+    } catch {
+      return JSON.parse(JSON.stringify(value));
+    }
+  }
+
+  function inferFileExtension(contentType: string | null | undefined): string {
+    if (!contentType) return 'png';
+    const lower = contentType.toLowerCase();
+    if (lower.includes('png')) return 'png';
+    if (lower.includes('jpeg') || lower.includes('jpg')) return 'jpg';
+    if (lower.includes('webp')) return 'webp';
+    if (lower.includes('svg')) return 'svg';
+    return 'png';
+  }
+
+  function sanitizePathSegment(value: string | null | undefined, fallback: string): string {
+    if (!value) return fallback;
+    const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    return normalized || fallback;
+  }
+
+  function isUploadableSource(value: unknown): value is string {
+    return typeof value === 'string' && value.trim().length > 0;
+  }
+
+  async function uploadImageSource(
+    source: string,
+    bucket: string,
+    pathSegments: string[],
+    fallbackName: string,
+  ): Promise<string | null> {
+    const trimmedBucket = bucket.trim();
+    if (!trimmedBucket) return null;
+
+    const trimmedSource = source.trim();
+    const cacheKey = `${trimmedBucket}:${trimmedSource}`;
+    const cached = storageUploadCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const response = await fetch(trimmedSource);
+      if (!response.ok) {
+        throw new Error(`Fetch failed with status ${response.status}`);
+      }
+      const blob = await response.blob();
+      const contentType = response.headers.get('content-type') || blob.type || 'image/png';
+      const extension = inferFileExtension(contentType);
+      const safeSegments = pathSegments.map((segment, index) =>
+        sanitizePathSegment(segment, index === pathSegments.length - 1 ? fallbackName : `segment-${index + 1}`));
+      const path = `${safeSegments.join('/')}.${extension}`;
+      const storageBucket = supabase.storage.from(trimmedBucket);
+      const { error } = await storageBucket.upload(path, blob, {
+        contentType,
+        upsert: true,
+        cacheControl: '3600',
+      });
+      if (error) {
+        throw error;
+      }
+      const { data } = storageBucket.getPublicUrl(path);
+      const publicUrl = data?.publicUrl ?? null;
+      if (publicUrl) {
+        storageUploadCache.set(cacheKey, publicUrl);
+      }
+      return publicUrl;
+    } catch (error) {
+      console.error('[Checkout] Failed to upload image to storage', error);
+      return null;
+    }
+  }
+
+  function collectDesignImageSources(designState: SerializedDesignState | null): string[] {
+    if (!designState || !designState.views) return [];
+    const collected = new Set<string>();
+    for (const view of Object.values(designState.views)) {
+      if (!view || !Array.isArray(view.images)) continue;
+      for (const image of view.images) {
+        const src = typeof image?.imgUrl === 'string' ? image.imgUrl.trim() : '';
+        if (src) {
+          collected.add(src);
+        }
+      }
+    }
+    return Array.from(collected);
+  }
+
+  function buildDesignElements(
+    designState: SerializedDesignState | null,
+    assetLookup: Map<string, string>,
+  ): Array<Record<string, any>> {
+    if (!designState || !designState.views) return [];
+    const entries: Array<Record<string, any>> = [];
+    for (const [viewName, view] of Object.entries(designState.views)) {
+      const designView = viewName as DesignViewName;
+      if (!view) continue;
+      const images = Array.isArray(view.images) ? view.images : [];
+      const texts = Array.isArray(view.texts) ? view.texts : [];
+
+      for (const image of images) {
+        const source = typeof image.imgUrl === 'string'
+          ? assetLookup.get(image.imgUrl) ?? image.imgUrl ?? null
+          : null;
+        entries.push({
+          type: 'image',
+          view: designView,
+          id: image.id,
+          name: image.name ?? null,
+          isVector: Boolean(image.isVector),
+          position: { x: image.x, y: image.y },
+          size: { width: image.w, height: image.h },
+          rotation: image.rotation,
+          zIndex: image.z,
+          aspect: image.aspect,
+          shapeMeta: image.shapeMeta ?? null,
+          source,
+        });
+      }
+
+      for (const text of texts) {
+        entries.push({
+          type: 'text',
+          view: designView,
+          id: text.id,
+          content: text.content,
+          font: text.font,
+          color: text.color,
+          outlineColor: text.outlineColor,
+          outlineWidth: text.outlineWidth,
+          size: text.size,
+          alignment: text.alignment,
+          position: { x: text.x, y: text.y },
+          area: { width: text.w, height: text.h },
+          rotation: text.rotation,
+          zIndex: text.z,
+          effect: text.effect ? cloneSerializable(text.effect) : null,
+        });
+      }
+    }
+    return entries;
+  }
+
+  function deriveAssetName(source: string, index: number): string {
+    const base = source.startsWith('data:')
+      ? `design-${index + 1}`
+      : sanitizePathSegment(
+        source.split('?')[0].split('/').pop()?.replace(/\.[^.]+$/, '') ?? '',
+        `design-${index + 1}`,
+      );
+    return base || `design-${index + 1}`;
+  }
+
+  function generateRandomOrderItemId(): string {
+    return Math.floor(Math.random() * 100000000).toString().padStart(8, '0');
+  }
+
+  function splitCustomerName(fullName: string | null | undefined): { firstName: string; lastName: string } {
+    const raw = typeof fullName === 'string' ? fullName.trim() : '';
+    if (!raw) {
+      return { firstName: 'Customer', lastName: 'Unknown' };
+    }
+    const parts = raw.split(/\s+/);
+    const firstName = parts.shift() ?? 'Customer';
+    const lastName = parts.length ? parts.join(' ') : firstName;
+    return {
+      firstName,
+      lastName,
+    };
+  }
+
+  function clearCheckoutQueryParam() {
+    if (typeof window === 'undefined') return;
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has('checkout')) return;
+      url.searchParams.delete('checkout');
+      window.history.replaceState(window.history.state, document.title, url.toString());
+    } catch (error) {
+      console.warn('[Checkout] Failed to clear checkout query param', error);
+    }
+  }
+
+  async function recordOrderIfNeeded() {
+    if (orderRecording.value || orderRecorded.value) return;
+    orderRecording.value = true;
+
+    const customerSnapshot = cloneSerializable(checkoutStore.customer);
+    const rawItemsSnapshot = cloneSerializable<CartItem[]>(cartItems.value);
+    const orderToken = sanitizePathSegment(
+      `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      'order',
+    );
+
+    type DesignAssetRecord = {
+      cartItemId: string;
+      original: string;
+      url: string;
+      bucket: string | null;
+      stored: boolean;
+    };
+    type DesignEntry = {
+      cartItemId: string;
+      assets: Array<{ original: string; url: string; bucket: string | null; stored: boolean }> | null;
+      elements: Array<Record<string, any>> | null;
+    };
+
+    const orderItemsPayload: Array<{
+      cartItemId: string;
+      shirt: CartItem['product'] | null;
+      color: CartItem['color'] | null;
+      size: CartItem['size'];
+      quantity: CartItem['quantity'];
+      minimumQuantity: CartItem['minimumQuantity'];
+      front_design_url: string | null;
+      back_design_url: string | null;
+    }> = [];
+
+    const designAssets: DesignAssetRecord[] = [];
+    const assetUrlLookup = new Map<string, string>();
+    const orderItemIdCache = new Map<string, string>();
+    const usedOrderItemIds = new Set<string>();
+
+    const resolveOrderItemId = (item: CartItem): string => {
+      const existing = orderItemIdCache.get(item.id);
+      if (existing) return existing;
+      let candidate: string;
+      do {
+        candidate = generateRandomOrderItemId();
+      } while (usedOrderItemIds.has(candidate));
+      orderItemIdCache.set(item.id, candidate);
+      usedOrderItemIds.add(candidate);
+      return candidate;
+    };
+
+    for (const [index, item] of rawItemsSnapshot.entries()) {
+      const orderItemId = resolveOrderItemId(item);
+      const itemSlug = sanitizePathSegment(item?.id ?? `item-${index + 1}`, `item-${index + 1}`);
+      const previewSources = resolvePreviewSources(item);
+      let frontDesignUrl: string | null = null;
+      let backDesignUrl: string | null = null;
+
+      if (isUploadableSource(previewSources.Front)) {
+        const uploadedFront = await uploadImageSource(
+          previewSources.Front,
+          ORDER_PREVIEWS_BUCKET,
+          ['orders', orderToken, itemSlug, 'front'],
+          'front',
+        );
+        frontDesignUrl = uploadedFront ?? previewSources.Front;
+      }
+
+      if (isUploadableSource(previewSources.Back)) {
+        const uploadedBack = await uploadImageSource(
+          previewSources.Back,
+          ORDER_PREVIEWS_BUCKET,
+          ['orders', orderToken, itemSlug, 'back'],
+          'back',
+        );
+        backDesignUrl = uploadedBack ?? previewSources.Back;
+      }
+
+      orderItemsPayload.push({
+        cartItemId: orderItemId,
+        shirt: item.product ?? null,
+        color: item.color ?? null,
+        size: item.size ?? null,
+        quantity: item.quantity,
+        minimumQuantity: item.minimumQuantity,
+        front_design_url: frontDesignUrl,
+        back_design_url: backDesignUrl,
+      });
+
+      const uploadedSources = collectDesignImageSources(item.designState);
+      for (const [sourceIndex, source] of uploadedSources.entries()) {
+        const assetName = deriveAssetName(source, sourceIndex);
+        const uploadedDesign = await uploadImageSource(
+          source,
+          ORDER_DESIGNS_BUCKET,
+          ['orders', orderToken, itemSlug, assetName],
+          assetName,
+        );
+        const isDataUrl = source.startsWith('data:');
+        const finalUrl = uploadedDesign ?? (isDataUrl ? null : source);
+        if (finalUrl) {
+          const stored = Boolean(uploadedDesign);
+          designAssets.push({
+            cartItemId: orderItemId,
+            original: source,
+            url: finalUrl,
+            bucket: stored ? (ORDER_DESIGNS_BUCKET || null) : null,
+            stored,
+          });
+          assetUrlLookup.set(source, finalUrl);
+        }
+      }
+    }
+
+    const designEntries: DesignEntry[] = rawItemsSnapshot
+      .map((item) => {
+        const orderItemId = resolveOrderItemId(item);
+        const assetEntries = designAssets
+          .filter((asset) => asset.cartItemId === orderItemId)
+          .map((asset) => ({
+            original: asset.original,
+            url: asset.url,
+            bucket: asset.bucket,
+            stored: asset.stored,
+          }));
+        const elementEntries = buildDesignElements(item.designState, assetUrlLookup);
+        if (!assetEntries.length && !elementEntries.length) {
+          return null;
+        }
+        return {
+          cartItemId: orderItemId,
+          assets: assetEntries.length ? assetEntries : null,
+          elements: elementEntries.length ? elementEntries : null,
+        };
+      })
+      .filter((entry): entry is DesignEntry => Boolean(entry));
+
+    const { firstName, lastName } = splitCustomerName(customerSnapshot.fullName);
+    const email = typeof customerSnapshot.email === 'string' && customerSnapshot.email.trim()
+      ? customerSnapshot.email.trim()
+      : 'unknown@example.com';
+    const phone = typeof customerSnapshot.phone === 'string' && customerSnapshot.phone.trim()
+      ? customerSnapshot.phone.trim()
+      : 'Not provided';
+    const company = typeof customerSnapshot.company === 'string' && customerSnapshot.company.trim()
+      ? customerSnapshot.company.trim()
+      : null;
+    const orderDetails = typeof customerSnapshot.notes === 'string' && customerSnapshot.notes.trim()
+      ? customerSnapshot.notes.trim()
+      : null;
+    const orderTotal = Number.isFinite(cartStore.subtotal)
+      ? Math.round((cartStore.subtotal as number) * 100) / 100
+      : null;
+
+    try {
+      const { error } = await supabase.from('orders').insert([{
+        first_name: firstName,
+        last_name: lastName,
+        company,
+        phone,
+        items: orderItemsPayload.length ? orderItemsPayload : null,
+        designs: designEntries.length ? designEntries : null,
+        order_details: orderDetails,
+        email,
+        payment_status: true,
+        order_total: orderTotal,
+        status: 'pending',
+      }]);
+
+      if (error) {
+        throw error;
+      }
+
+      orderRecorded.value = true;
+      clearCheckoutQueryParam();
+    } catch (error) {
+      console.error('[Checkout] Failed to record order in Supabase', error);
+    } finally {
+      orderRecording.value = false;
+    }
   }
 
   async function setupPaymentElement(clientSecret: string) {
@@ -433,6 +916,7 @@
 
     requestStatus.value = 'success';
     paymentProcessing.value = false;
+    recordOrderIfNeeded();
   }
 
   function goBackToContactFromPayment() {
@@ -776,6 +1260,7 @@
       step2Complete.value = true;
       requestStatus.value = 'success';
       currentStep.value = 3;
+      recordOrderIfNeeded();
     } else if (state === 'canceled') {
       step1Complete.value = true;
       step2Complete.value = true;
@@ -809,6 +1294,20 @@
       panelRef.value?.focus();
     });
   });
+
+  watch(() => requestStatus.value, (status) => {
+    if (status === 'success') {
+      recordOrderIfNeeded();
+    } else if (status === 'idle') {
+      orderRecorded.value = false;
+    }
+  });
+
+  watch(cartItems, (items) => {
+    if (!items.length) {
+      orderRecorded.value = false;
+    }
+  }, { deep: true });
 </script>
 
 <style scoped lang="scss">
