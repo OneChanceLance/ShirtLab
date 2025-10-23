@@ -118,18 +118,6 @@
     cartStore.closePanel();
   }
 
-  function incrementCartItemQuantity(item: CartItem) {
-    cartStore.setItemQuantity(item.id, item.quantity + 1);
-  }
-
-  function decrementCartItemQuantity(item: CartItem) {
-    if (item.quantity <= item.minimumQuantity) {
-      cartStore.removeItem(item.id);
-      return;
-    }
-    cartStore.setItemQuantity(item.id, item.quantity - 1);
-  }
-
   function onCartItemQuantityChange(id: string, event: Event) {
     const target = event.target as HTMLInputElement | null;
     if (!target) return;
@@ -153,7 +141,7 @@
   function cartItemVariantLabel(item: CartItem): string {
     const brand = item.product?.brand ?? 'Brand TBD';
     const sizeLabel = item.size ?? 'Size TBD';
-    return `${brand}`;
+    return `${brand} · ${sizeLabel}`;
   }
 
   function cartItemUnitPriceLabel(item: CartItem): string | null {

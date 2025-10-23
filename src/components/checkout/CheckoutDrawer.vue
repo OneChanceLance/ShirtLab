@@ -919,13 +919,6 @@
     recordOrderIfNeeded();
   }
 
-  function goBackToContactFromPayment() {
-    if (paymentProcessing.value) return;
-    resetPaymentFlow();
-    requestStatus.value = 'idle';
-    currentStep.value = 2;
-  }
-
   type Step = 1 | 2 | 3;
   const currentStep = ref<Step>(1);
   const step1Complete = ref(false);
@@ -1023,29 +1016,6 @@
       previewView.value = fallback;
     }
   }, { immediate: true });
-
-  const activeVariantLabel = computed(() => {
-    const item = activeCartItem.value;
-    if (!item) return 'No variant selected';
-    const colorLabel = item.color?.name ?? 'Color TBD';
-    const sizeLabel = item.size ?? 'Size TBD';
-    return `${colorLabel} · ${sizeLabel}`;
-  });
-
-  const activeUnitPriceLabel = computed(() => {
-    const item = activeCartItem.value;
-    if (!item || !Number.isFinite(item.unitPrice)) return null;
-    return formatCurrency(item.unitPrice as number, item.currency);
-  });
-
-  const activeMinimumQuantity = computed(() => activeCartItem.value?.minimumQuantity ?? 1);
-
-  const activeQuantityHint = computed(() => {
-    const min = activeMinimumQuantity.value;
-    if (!min || min <= 1) return 'No minimum order requirement';
-    return `Minimum order: ${min} pcs`;
-  });
-
 
   function proceedToContact() {
     if (!hasCartItems.value) return;

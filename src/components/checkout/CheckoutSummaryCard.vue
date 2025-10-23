@@ -59,7 +59,7 @@
   import { storeToRefs } from 'pinia';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
-  import type { AddCartItemPayload, CartItem, CartItemDesignPreviews } from '../../stores/cart';
+  import type { AddCartItemPayload, CartItemDesignPreviews } from '../../stores/cart';
   import { findMeasurementForSize } from '../../utils/sizeMeasurements';
   import { formatCurrency } from '../../utils/currency';
   import { calculatePricing } from '../../utils/pricing';
@@ -171,22 +171,10 @@
     },
   });
 
-  const quantityHint = computed(() => {
-    const min = minimumQuantity.value;
-    if (!min || min <= 1) return 'No minimum order requirement';
-    return `Minimum order: ${min} pcs`;
-  });
-
   const measurementEntry = computed(() => findMeasurementForSize(sizeMeasurements.value, size.value ?? undefined));
 
   const cartItems = computed(() => cartStore.items);
   const cartIsEmpty = computed(() => cartStore.isEmpty);
-  const cartItemCount = computed(() => cartStore.itemCount);
-  const cartSubtotalLabel = computed(() => {
-    const total = cartStore.subtotal;
-    if (!Number.isFinite(total) || total <= 0) return null;
-    return formatCurrency(total, cartStore.firstCurrency);
-  });
 
   watch(cartItems, (items) => {
     if (!items.length) {
@@ -198,16 +186,6 @@
       checkoutStore.finishEditingCartItem();
     }
   });
-
-  function incrementQuantity() {
-    quantityModel.value = checkoutStore.quantity + 1;
-  }
-
-  function decrementQuantity() {
-    const min = minimumQuantity.value && minimumQuantity.value > 0 ? minimumQuantity.value : 1;
-    const next = checkoutStore.quantity - 1;
-    quantityModel.value = next < min ? min : next;
-  }
 
   function addCurrentSelectionToCart() {
     if (!hasVariant.value) return;
@@ -308,50 +286,6 @@
   function handleViewCart() {
     if (cartIsEmpty.value) return;
     cartStore.openPanel();
-  }
-
-  function removeCartItem(id: string) {
-    cartStore.removeItem(id);
-  }
-
-  function clearCart() {
-    cartStore.clear();
-  }
-
-  function incrementCartItemQuantity(item: CartItem) {
-    cartStore.setItemQuantity(item.id, item.quantity + 1);
-  }
-
-  function decrementCartItemQuantity(item: CartItem) {
-    if (item.quantity <= item.minimumQuantity) {
-      cartStore.removeItem(item.id);
-      return;
-    }
-    cartStore.setItemQuantity(item.id, item.quantity - 1);
-  }
-
-  function onCartItemQuantityChange(id: string, event: Event) {
-    const target = event.target as HTMLInputElement | null;
-    if (!target) return;
-    const value = Number(target.value);
-    cartStore.setItemQuantity(id, value);
-  }
-
-  function cartItemVariantLabel(item: CartItem): string {
-    const colorLabel = item.color?.name ?? 'Color TBD';
-    const sizeValue = item.size ?? 'Size TBD';
-    return `${colorLabel} · ${sizeValue}`;
-  }
-
-  function cartItemUnitPriceLabel(item: CartItem): string | null {
-    if (!Number.isFinite(item.unitPrice)) return null;
-    return formatCurrency(item.unitPrice as number, item.currency);
-  }
-
-  function cartItemTotalLabel(item: CartItem): string {
-    if (!Number.isFinite(item.unitPrice)) return `${item.quantity} pcs`;
-    const lineTotal = (item.unitPrice as number) * item.quantity;
-    return formatCurrency(lineTotal, item.currency) ?? `${item.quantity} pcs`;
   }
 </script>
 
