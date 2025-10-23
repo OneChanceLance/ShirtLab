@@ -483,8 +483,6 @@
       ?? product?.brand
       ?? null;
 
-    const frontCandidate = defaultColor?.frontUrl ?? defaultColor?.front ?? null;
-    const backCandidate = defaultColor?.backUrl ?? defaultColor?.back ?? null;
     const resolvedSide = null;
 
     const record: ClothingRecord = {

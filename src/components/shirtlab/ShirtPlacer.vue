@@ -96,7 +96,6 @@
 
 
 
-  import Zoom from './image.png'
   // Icon component array for handle buttons
   const iconComponents = [DeleteIcon, ResizeIcon, DuplicateIcon, RotateIcon];
   const textIconComponents = [DeleteIcon, ArrowLeftRight, DuplicateIcon, RotateIcon];
