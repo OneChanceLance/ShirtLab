@@ -145,44 +145,60 @@
                         placeholder="Share artwork details, deadlines, and special requests"></textarea>
                     </label>
                   </div>
-                  <div class="checkout-form__summary">
-                    <div>
-                      <span>Total items</span>
-                      <strong>{{ cartItemCount }}</strong>
+                  <div class="checkout-summary">
+                    <div class="checkout-summary__section">
+                      <div v-for="detail in cartPricingDetails" :key="detail.item.id" class="checkout-summary__item">
+                        <div class="summary-item__info">
+                          <span class="summary-item__title">
+                            {{ detail.item.product?.name ?? 'Custom apparel' }}
+                            <template v-if="detail.item.quantity > 1"> ({{ detail.item.quantity }}x)</template>
+                          </span>
+                          <ul class="summary-item__charges">
+                            <li>
+                              <span>Garment base</span>
+                              <strong>{{ detail.formatted.basePerUnit ?? '—' }}</strong>
+                            </li>
+                            <li v-for="(charge, idx) in detail.breakdown.designCharges" :key="idx">
+                              <span>
+                                {{ designChargeLabel(charge) }}
+                                <small v-if="designChargeMeta(charge)">
+                                  {{ designChargeMeta(charge) }}
+                                </small>
+                              </span>
+                              <strong>{{ formatCurrency(charge.charge, detail.currency ?? cartStore.firstCurrency ?? 'USD') }}</strong>
+                            </li>
+                          </ul>
+                        </div>
+                        <div class="summary-item__total">
+                          <strong>{{ detail.formatted.unitPrice ?? '—' }}</strong>
+                          <small>Per item total</small>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span>Garment subtotal</span>
-                      <strong>{{ cartPricingSummary.baseLabel ?? '—' }}</strong>
+                    <div v-if="cartPricingSummary.hasDiscount" class="checkout-summary__section">
+                      <div class="checkout-summary__discount">
+                        <span>
+                          Quantity discount
+                        </span>
+                        <strong>-{{ cartPricingSummary.discountLabel ?? '—' }}</strong>
+                      </div>
                     </div>
-                    <div>
-                      <span>Design charges</span>
-                      <strong>{{ cartPricingSummary.designLabel ?? '—' }}</strong>
+                    <div class="checkout-summary__section summary-taxes">
+                      <div class="checkout-summary__item summary-tax">
+                        <span>Sales tax ({{ (TAX_RATE * 100).toFixed(1) }}%)</span>
+                        <strong>{{ cartPricingSummary.taxLabel ?? '—' }}</strong>
+                      </div>
+                      <div class="checkout-summary__item summary-tax">
+                        <span>Stripe processing ({{ (STRIPE_PERCENT * 100).toFixed(1) }}% + {{ formatCurrency(STRIPE_FIXED, cartPricingSummary.currency ?? cartStore.firstCurrency ?? 'USD') }})</span>
+                        <strong>{{ cartPricingSummary.stripeFeeLabel ?? '—' }}</strong>
+                      </div>
                     </div>
-                    <div v-if="cartPricingSummary.hasDiscount">
-                      <span>Quantity discounts</span>
-                      <strong>-{{ cartPricingSummary.discountLabel ?? '—' }}</strong>
-                    </div>
-                    <div>
-                      <span>Estimated total</span>
-                      <strong>{{ cartPricingSummary.finalLabel ?? cartSubtotalLabel ?? '—' }}</strong>
+                    <div class="checkout-summary__total">
+                      <span>Total due today</span>
+                      <strong>{{ formatCurrency((cartPricingSummary.finalTotal + cartPricingSummary.taxAmount + cartPricingSummary.stripeFees), cartPricingSummary.currency ?? cartStore.firstCurrency ?? 'USD') ?? '—' }}</strong>
                     </div>
                   </div>
-                  <ul v-if="cartPricingDetails.length" class="checkout-form__summary-details">
-                    <li v-for="detail in cartPricingDetails" :key="detail.item.id">
-                      <div class="summary-details__header">
-                        <span>{{ detail.item.product?.name ?? 'Custom apparel' }}</span>
-                        <span>× {{ detail.item.quantity }}</span>
-                      </div>
-                      <div class="summary-details__breakout">
-                        <span>Base {{ detail.formatted.basePerUnit ?? '—' }}</span>
-                        <span>Design {{ detail.formatted.designPerUnit ?? '—' }}</span>
-                        <span v-if="detail.breakdown.quantityDiscount">
-                          Discount −{{ detail.formatted.discountPerUnit ?? '—' }} ({{ detail.breakdown.quantityDiscount?.type }})
-                        </span>
-                        <span>Total {{ detail.formatted.unitPrice ?? '—' }}</span>
-                      </div>
-                    </li>
-                  </ul>
+
                   <p v-if="checkoutError" class="checkout-form__error">
                     {{ checkoutError }}
                   </p>
@@ -365,6 +381,10 @@
       };
     });
   });
+  const TAX_RATE = 0.06;
+  const STRIPE_PERCENT = 0.029;
+  const STRIPE_FIXED = 0.3;
+
   const cartPricingSummary = computed(() => {
     const details = cartPricingDetails.value;
     if (!details.length) {
@@ -375,12 +395,16 @@
         discountTotal: 0,
         finalTotal: 0,
         subtotal: 0,
+        taxAmount: 0,
+        stripeFees: 0,
         currency,
         baseLabel: formatCurrency(0, currency),
         designLabel: formatCurrency(0, currency),
         discountLabel: null,
         finalLabel: formatCurrency(0, currency),
         subtotalLabel: formatCurrency(0, currency),
+        taxLabel: formatCurrency(0, currency),
+        stripeFeeLabel: formatCurrency(0, currency),
         hasDiscount: false,
       };
     }
@@ -402,24 +426,49 @@
       }
     });
     const subtotal = baseTotal + designTotal;
+    const taxAmount = Math.round(finalTotal * TAX_RATE * 100) / 100;
+    const stripeFees = Math.round(((finalTotal + taxAmount) * STRIPE_PERCENT + STRIPE_FIXED) * 100) / 100;
     return {
       baseTotal,
       designTotal,
       discountTotal,
       finalTotal,
       subtotal,
+      taxAmount,
+      stripeFees,
       currency,
       baseLabel: formatCurrency(baseTotal, currency),
       designLabel: formatCurrency(designTotal, currency),
       discountLabel: discountTotal ? formatCurrency(Math.abs(discountTotal), currency) : null,
       finalLabel: formatCurrency(finalTotal, currency),
       subtotalLabel: formatCurrency(subtotal, currency),
+      taxLabel: formatCurrency(taxAmount, currency),
+      stripeFeeLabel: formatCurrency(stripeFees, currency),
       hasDiscount: discountTotal > 0,
     };
   });
 
   const activeCartItemId = ref<string | null>(null);
   const panelRef = ref<HTMLElement | null>(null);
+
+  function designChargeLabel(charge: any): string {
+    const view = charge?.view ?? 'View';
+    const type = charge?.elementType === 'text' ? 'Text' : 'Graphic';
+    const index = typeof charge?.elementIndex === 'number' ? ` #${charge.elementIndex + 1}` : '';
+    const category = charge?.category === 'full' ? 'Full coverage' : 'Left/partial';
+    return `${view} ${type}${index} (${category})`;
+  }
+
+  function designChargeMeta(charge: any): string | null {
+    const parts: string[] = [];
+    if (typeof charge?.widthInches === 'number' && typeof charge?.heightInches === 'number') {
+      parts.push(`${charge.widthInches.toFixed(1)}″ × ${charge.heightInches.toFixed(1)}″`);
+    }
+    if (typeof charge?.coverageRatio === 'number') {
+      parts.push(`${Math.round(charge.coverageRatio * 100)}% of grid`);
+    }
+    return parts.length ? parts.join(' · ') : null;
+  }
 
   async function loadStripeScript(): Promise<void> {
     if (typeof window === 'undefined') return;
@@ -2252,34 +2301,6 @@
     grid-column: 1 / -1;
   }
 
-  .checkout-form__summary {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.9rem 1.1rem;
-    border-radius: 1rem;
-    background: linear-gradient(135deg, rgba(226, 232, 240, 0.45), rgba(248, 250, 252, 0.7));
-    border: 1px solid rgba(148, 163, 184, 0.26);
-  }
-
-  .checkout-form__summary>div {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  .checkout-form__summary span {
-    font-size: 0.75rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #64748b;
-  }
-
-  .checkout-form__summary strong {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #0f172a;
-  }
 
   .checkout-form__error {
     margin: 0;
@@ -2348,6 +2369,146 @@
   .checkout-overlay__empty button:hover {
     background: rgba(148, 163, 184, 0.3);
     transform: translateY(-1px);
+  }
+
+  .checkout-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    padding: 1.5rem;
+    border-radius: 1.25rem;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.85), rgba(241, 245, 249, 0.65));
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    box-shadow: 0 24px 48px rgba(15, 23, 42, 0.15);
+    transition: all 0.3s ease;
+  }
+
+  .checkout-summary:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 32px 64px rgba(15, 23, 42, 0.2);
+  }
+
+  .checkout-summary__section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .checkout-summary__item,
+  .checkout-summary__discount,
+  .checkout-summary__total {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.95rem;
+    color: #1e293b;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  }
+
+  .checkout-summary__item span {
+    color: #64748b;
+    font-weight: 500;
+  }
+
+  .checkout-summary__item strong {
+    color: #0f172a;
+    font-weight: 600;
+  }
+
+  .checkout-summary__discount {
+    color: #16a34a;
+    font-weight: 600;
+  }
+
+  .checkout-summary__discount span {
+    color: #22c55e;
+  }
+
+  .checkout-summary__total {
+    border-top: 2px solid rgba(148, 163, 184, 0.25);
+    border-bottom: none;
+    padding-top: 0.75rem;
+    font-weight: 700;
+    font-size: 1.15rem;
+    color: #0f172a;
+  }
+
+  .summary-taxes {
+    gap: 0.6rem;
+  }
+
+  .summary-tax span {
+    color: #475569;
+    font-weight: 500;
+  }
+
+  .summary-tax strong {
+    color: #0f172a;
+  }
+
+  .summary-item__info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    max-width: 65%;
+  }
+
+  .summary-item__title {
+    color: #0f172a;
+    font-weight: 600;
+  }
+
+  .summary-item__charges {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .summary-item__charges li {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: #475569;
+  }
+
+  .summary-item__charges li strong {
+    color: #0f172a;
+    font-weight: 600;
+  }
+
+  .summary-item__charges li small {
+    display: block;
+    font-size: 0.72rem;
+    color: rgba(71, 85, 105, 0.85);
+  }
+
+  .summary-item__total {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.2rem;
+  }
+
+  .summary-item__total strong {
+    font-size: 1rem;
+    color: #0f172a;
+  }
+
+  .summary-item__total small {
+    font-size: 0.75rem;
+    color: #64748b;
+  }
+
+
+  .checkout-summary__total span {
+    color: #38bdf8;
   }
 
   @media (max-width: 1024px) {

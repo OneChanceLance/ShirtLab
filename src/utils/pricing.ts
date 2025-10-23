@@ -5,12 +5,15 @@ export type DesignCategory = 'full' | 'left';
 
 export interface DesignChargeDetail {
   view: DesignViewName;
+  elementIndex?: number;
+  elementType?: 'image' | 'text';
   category: DesignCategory;
   basePrice: number;
   multiplier: number;
   charge: number;
   widthInches?: number;
   heightInches?: number;
+  coverageRatio?: number;
   source: 'bounds' | 'preview';
 }
 
@@ -44,6 +47,43 @@ const DESIGN_FULL_PRICE = 18;
 const DESIGN_LEFT_PRICE = 10;
 const SECOND_SIDE_DISCOUNT = 0.5;
 const DEFAULT_PIXELS_PER_INCH = 40;
+const FULL_GRID_RATIO_THRESHOLD = 0.7;
+
+const FALLBACK_GRID_INCHES: Record<string, number> = {
+  width: 12,
+  height: 18,
+};
+
+function resolveSizeBaseline(definition: Record<string, any> | null | undefined): number | null {
+  if (!definition) return null;
+  const raw = definition.size;
+  if (raw === null || raw === undefined) return null;
+  const normalized = String(raw).trim().toUpperCase();
+  if (!normalized) return null;
+  const forcedNumeric = Number(normalized);
+  if (Number.isFinite(forcedNumeric)) {
+    return forcedNumeric;
+  }
+  if (/^\d+$/.test(normalized)) {
+    return Number.parseInt(normalized, 10);
+  }
+  const match = normalized.match(/\(?\s*(\d+)\s*(?:[\/-]\s*(\d+))?\s*(?:Y|YR|YEAR|K)\s*\)?/);
+  if (match) {
+    const years = Number(match[1]);
+    if (Number.isFinite(years)) {
+      return Math.max(0, years);
+    }
+  }
+  const fractional = normalized.match(/(\d+)\s*(?:\/|\.)\s*(\d+)/);
+  if (fractional) {
+    const a = Number(fractional[1]);
+    const b = Number(fractional[2]);
+    if (Number.isFinite(a) && Number.isFinite(b) && b !== 0) {
+      return a / b;
+    }
+  }
+  return null;
+}
 
 function roundCurrency(value: number): number {
   return Math.round(value * 100) / 100;
@@ -58,20 +98,16 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
-function derivePixelsPerInch(definition: Record<string, any> | null | undefined): number {
-  if (!definition) return DEFAULT_PIXELS_PER_INCH;
-  const grid = definition.grid ?? {};
 
-  const candidates = [grid.pxPerInch, grid.pixelsPerInch, grid.dpi];
-  for (const candidate of candidates) {
-    const value = toNumber(candidate);
-    if (value && value > 0) return value;
-  }
+function computeGridPixelsPerInch(grid: Record<string, any> | null | undefined): number | null {
+  if (!grid) return null;
+  const explicit = toNumber((grid as any).pxPerInch ?? (grid as any).pixelsPerInch ?? (grid as any).dpi ?? (grid as any).ppi);
+  if (explicit && explicit > 0) return explicit;
 
-  const widthInches = toNumber(grid.widthInches ?? grid.physicalWidth ?? grid.widthIn ?? grid.width_in);
-  const heightInches = toNumber(grid.heightInches ?? grid.physicalHeight ?? grid.heightIn ?? grid.height_in);
-  const widthPixels = toNumber(grid.w ?? grid.widthPx);
-  const heightPixels = toNumber(grid.h ?? grid.heightPx);
+  const widthPixels = toNumber((grid as any).w ?? (grid as any).widthPx ?? (grid as any).width);
+  const heightPixels = toNumber((grid as any).h ?? (grid as any).heightPx ?? (grid as any).height);
+  const widthInches = toNumber((grid as any).widthInches ?? (grid as any).physicalWidth ?? (grid as any).widthIn ?? (grid as any).width_in);
+  const heightInches = toNumber((grid as any).heightInches ?? (grid as any).physicalHeight ?? (grid as any).heightIn ?? (grid as any).height_in);
 
   const ratios: number[] = [];
   if (widthInches && widthInches > 0 && widthPixels && widthPixels > 0) {
@@ -85,96 +121,176 @@ function derivePixelsPerInch(definition: Record<string, any> | null | undefined)
     return ratios.reduce((acc, val) => acc + val, 0) / ratios.length;
   }
 
+  return null;
+}
+
+function derivePixelsPerInch(definition: Record<string, any> | null | undefined): number {
+  if (!definition) return DEFAULT_PIXELS_PER_INCH;
+  const grid = definition.grid ?? {};
+
+  const gridPpi = computeGridPixelsPerInch(grid);
+  if (gridPpi && gridPpi > 0) return gridPpi;
+
+  const widthPixels = toNumber((grid as any).w ?? (grid as any).widthPx ?? (grid as any).width);
+  const heightPixels = toNumber((grid as any).h ?? (grid as any).heightPx ?? (grid as any).height);
+
+  if (widthPixels && heightPixels) {
+    const sizeBaseline = resolveSizeBaseline(definition);
+    if (sizeBaseline) {
+      const assumedWidthInches = FALLBACK_GRID_INCHES.width * (sizeBaseline / 12);
+      const assumedHeightInches = FALLBACK_GRID_INCHES.height * (sizeBaseline / 12);
+      const derivedWidth = widthPixels / assumedWidthInches;
+      const derivedHeight = heightPixels / assumedHeightInches;
+      const avg = (derivedWidth + derivedHeight) / 2;
+      if (avg > 0) {
+        return avg;
+      }
+    }
+  }
+
   return DEFAULT_PIXELS_PER_INCH;
 }
 
-function computeBoundsPx(view: SerializedDesignState['views'][DesignViewName] | undefined | null) {
-  if (!view) return null;
+type DesignElement = {
+  widthPx: number;
+  heightPx: number;
+  index: number;
+  type: 'image' | 'text';
+};
+
+function extractDesignElements(view: SerializedDesignState['views'][DesignViewName] | undefined | null): DesignElement[] {
+  if (!view) return [];
+  const elements: DesignElement[] = [];
+
   const images = Array.isArray(view.images) ? view.images : [];
+  images.forEach((img, idx) => {
+    const widthPx = toNumber((img as any)?.w);
+    const heightPx = toNumber((img as any)?.h);
+    if (widthPx && widthPx > 0 && heightPx && heightPx > 0) {
+      elements.push({
+        widthPx,
+        heightPx,
+        index: idx,
+        type: 'image',
+      });
+    }
+  });
+
   const texts = Array.isArray(view.texts) ? view.texts : [];
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let hasData = false;
+  texts.forEach((txt, idx) => {
+    const widthPx = toNumber((txt as any)?.w);
+    const heightPx = toNumber((txt as any)?.h);
+    if (widthPx && widthPx > 0 && heightPx && heightPx > 0) {
+      elements.push({
+        widthPx,
+        heightPx,
+        index: idx,
+        type: 'text',
+      });
+    }
+  });
 
-  const includeRect = (x: unknown, y: unknown, w: unknown, h: unknown) => {
-    const width = toNumber(w);
-    const height = toNumber(h);
-    const px = toNumber(x);
-    const py = toNumber(y);
-    if (!width || !height || width <= 0 || height <= 0 || px === null || py === null) return;
-    minX = Math.min(minX, px);
-    minY = Math.min(minY, py);
-    maxX = Math.max(maxX, px + width);
-    maxY = Math.max(maxY, py + height);
-    hasData = true;
-  };
-
-  for (const image of images) {
-    includeRect(image.x, image.y, image.w, image.h);
-  }
-
-  for (const text of texts) {
-    includeRect(text.x, text.y, text.w, text.h);
-  }
-
-  if (!hasData) return null;
-  return {
-    widthPx: Math.max(0, maxX - minX),
-    heightPx: Math.max(0, maxY - minY),
-  };
+  return elements;
 }
 
 function classifyDesignCategory(
   viewName: DesignViewName,
   designState: SerializedDesignState | null | undefined,
   previews: CartItemDesignPreviews | null | undefined,
-  ppi: number,
+  grid: Record<string, any> | null | undefined,
+  fallbackPpi: number,
   logger?: PricingInput['logger'],
-): DesignChargeDetail | null {
+): DesignChargeDetail[] {
+  const gridWidthPx = toNumber((grid as any)?.w ?? (grid as any)?.widthPx ?? (grid as any)?.width);
+  const gridHeightPx = toNumber((grid as any)?.h ?? (grid as any)?.heightPx ?? (grid as any)?.height);
+  const gridWidthInches = toNumber((grid as any)?.widthInches ?? (grid as any)?.physicalWidth ?? (grid as any)?.widthIn ?? (grid as any)?.width_in);
+  const gridHeightInches = toNumber((grid as any)?.heightInches ?? (grid as any)?.physicalHeight ?? (grid as any)?.heightIn ?? (grid as any)?.height_in);
+  const gridPpi = computeGridPixelsPerInch(grid) ?? fallbackPpi ?? DEFAULT_PIXELS_PER_INCH;
+
+  const elements = extractDesignElements(designState?.views?.[viewName]);
   const trimmedPreview = previews?.[viewName];
   const hasPreview = typeof trimmedPreview === 'string' && trimmedPreview.trim().length > 0;
-  const view = designState?.views?.[viewName];
-  const bounds = computeBoundsPx(view);
+  const charges: DesignChargeDetail[] = [];
 
-  if (!bounds) {
+  if (!elements.length) {
     if (!hasPreview) {
       logger?.(`No ${viewName} design detected.`);
-      return null;
+      return charges;
     }
     logger?.(`Detected ${viewName} preview without bounds; treating as left-chest charge.`, { view: viewName });
-    return {
+    charges.push({
       view: viewName,
       category: 'left',
       basePrice: DESIGN_LEFT_PRICE,
       multiplier: 1,
       charge: DESIGN_LEFT_PRICE,
       source: 'preview',
-    };
+    });
+    return charges;
   }
 
-  const widthInches = bounds.widthPx / (ppi || DEFAULT_PIXELS_PER_INCH);
-  const heightInches = bounds.heightPx / (ppi || DEFAULT_PIXELS_PER_INCH);
-  const isFull = widthInches > DESIGN_PRICE_THRESHOLD_INCHES || heightInches > DESIGN_PRICE_THRESHOLD_INCHES;
-  const base = isFull ? DESIGN_FULL_PRICE : DESIGN_LEFT_PRICE;
+  const computeDimension = (
+    boundsPx: number,
+    gridPx: number | null,
+    gridInches: number | null,
+    ppi: number,
+  ): number => {
+    if (gridPx && gridPx > 0 && gridInches && gridInches > 0) {
+      const ratio = boundsPx / gridPx;
+      return ratio * gridInches;
+    }
+    if (ppi && ppi > 0) {
+      return boundsPx / ppi;
+    }
+    return boundsPx / DEFAULT_PIXELS_PER_INCH;
+  };
 
-  logger?.(`Measured ${viewName} design`, {
-    widthInches: widthInches.toFixed(2),
-    heightInches: heightInches.toFixed(2),
-    category: isFull ? 'full' : 'left',
+  elements.forEach((element) => {
+    const widthInches = computeDimension(element.widthPx, gridWidthPx, gridWidthInches, gridPpi);
+    const heightInches = computeDimension(element.heightPx, gridHeightPx, gridHeightInches, gridPpi);
+    const widthRatio = gridWidthPx && gridWidthPx > 0 ? element.widthPx / gridWidthPx : null;
+    const heightRatio = gridHeightPx && gridHeightPx > 0 ? element.heightPx / gridHeightPx : null;
+
+    let isFull = false;
+    if (
+      (typeof widthRatio === 'number' && widthRatio >= FULL_GRID_RATIO_THRESHOLD) ||
+      (typeof heightRatio === 'number' && heightRatio >= FULL_GRID_RATIO_THRESHOLD)
+    ) {
+      isFull = true;
+    } else if (widthInches > DESIGN_PRICE_THRESHOLD_INCHES || heightInches > DESIGN_PRICE_THRESHOLD_INCHES) {
+      isFull = true;
+    }
+
+    const base = isFull ? DESIGN_FULL_PRICE : DESIGN_LEFT_PRICE;
+    const chargeDetail: DesignChargeDetail = {
+      view: viewName,
+      elementIndex: element.index,
+      elementType: element.type,
+      category: isFull ? 'full' : 'left',
+      basePrice: base,
+      multiplier: 1,
+      charge: base,
+      widthInches,
+      heightInches,
+      coverageRatio: Math.max(
+        typeof widthRatio === 'number' ? widthRatio : 0,
+        typeof heightRatio === 'number' ? heightRatio : 0,
+      ),
+      source: 'bounds',
+    };
+
+    logger?.(`Measured ${viewName} ${element.type} #${element.index}`, {
+      widthInches: widthInches.toFixed(2),
+      heightInches: heightInches.toFixed(2),
+      widthRatio: widthRatio !== null ? widthRatio.toFixed(2) : null,
+      heightRatio: heightRatio !== null ? heightRatio.toFixed(2) : null,
+      category: chargeDetail.category,
+    });
+
+    charges.push(chargeDetail);
   });
 
-  return {
-    view: viewName,
-    category: isFull ? 'full' : 'left',
-    basePrice: base,
-    multiplier: 1,
-    charge: base,
-    widthInches,
-    heightInches,
-    source: 'bounds',
-  };
+  return charges;
 }
 
 export function calculatePricing(input: PricingInput): PricingBreakdown {
@@ -189,23 +305,28 @@ export function calculatePricing(input: PricingInput): PricingBreakdown {
 
   const base = toNumber(basePrice) ?? 0;
   const ppi = derivePixelsPerInch(clothingDefinition);
+  const grid = clothingDefinition?.grid ?? null;
 
   const designCharges: DesignChargeDetail[] = [];
   (['Front', 'Back'] as DesignViewName[]).forEach((viewName, index) => {
-    const detail = classifyDesignCategory(viewName, designState ?? null, designPreviews, ppi, logger);
-    if (!detail) return;
+    const details = classifyDesignCategory(viewName, designState ?? null, designPreviews, grid, ppi, logger);
+    if (!details.length) return;
     const multiplier = index === 1 ? SECOND_SIDE_DISCOUNT : 1;
-    const charge = roundCurrency(detail.basePrice * multiplier);
-    designCharges.push({
-      ...detail,
-      multiplier,
-      charge,
-    });
-    logger?.(`Applied ${index === 0 ? 'primary' : 'secondary'} ${detail.category} design charge`, {
-      view: viewName,
-      base: detail.basePrice,
-      multiplier,
-      charge,
+    details.forEach((detail) => {
+      const charge = roundCurrency(detail.basePrice * multiplier);
+      designCharges.push({
+        ...detail,
+        multiplier,
+        charge,
+      });
+      logger?.(`Applied ${index === 0 ? 'primary' : 'secondary'} ${detail.category} design charge`, {
+        view: viewName,
+        elementIndex: detail.elementIndex,
+        elementType: detail.elementType,
+        base: detail.basePrice,
+        multiplier,
+        charge,
+      });
     });
   });
 

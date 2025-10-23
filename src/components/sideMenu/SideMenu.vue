@@ -10,8 +10,8 @@
       @click="() => requestMenu('Shapes', 'Choose Shape')" />
     <MenuButton variant="Colors" label="Product Colors" :active="props.activeMenu === 'Colors'"
       @click="() => requestMenu('Colors', 'Pick a Product Color')" />
-    <MenuButton variant="Sports" label="Sports Personalization" :active="props.activeMenu === 'Sports'"
-      @click="() => requestMenu('Sports', 'Add Sports Info')" />
+    <!--*<MenuButton variant="Sports" label="Sports Personalization" :active="props.activeMenu === 'Sports'"
+      @click="() => requestMenu('Sports', 'Add Sports Info')" /> -->
   </nav>
 </template>
 

@@ -765,23 +765,44 @@
   const frontPreview = ref<string>('');
   const backPreview = ref<string>('');
 
+  function hasDesignForView(view: View): boolean {
+    if (view === selectedView.value) {
+      if (images.length > 0 || texts.length > 0) {
+        return true;
+      }
+    }
+    const state = viewStates[view];
+    if (!state) return false;
+    return (state.images?.length ?? 0) > 0 || (state.texts?.length ?? 0) > 0;
+  }
+
   watch(frontPreview, (url) => {
-    checkoutStore.setDesignPreview('Front', url || null);
+    checkoutStore.setDesignPreview('Front', hasDesignForView('Front') ? (url || null) : null);
   }, { immediate: true });
 
   watch(backPreview, (url) => {
-    checkoutStore.setDesignPreview('Back', url || null);
+    checkoutStore.setDesignPreview('Back', hasDesignForView('Back') ? (url || null) : null);
   }, { immediate: true });
 
   watch(selectedView, (view) => {
     checkoutStore.setActiveDesignView(view);
   }, { immediate: true });
 
+  function syncDesignState() {
+    try {
+      const state = exportDesignState();
+      checkoutStore.setDesignState(state);
+    } catch (error) {
+      console.warn('[ShirtPlacer] Failed to sync design state', error);
+    }
+  }
+
   function refreshAllPreviews() {
     for (const view of ALL_VIEWS) {
       const src = viewToSrc[view] || fallbackPreview;
       setPreview(view, src);
     }
+    syncDesignState();
   }
 
   function setPreview(view: View, url: string) {
@@ -945,6 +966,7 @@
   }
 
   function updatePreviewFor(view: View, { skipBackground = false } = {}) {
+    storeViewState(view);
     if (skipBackground) return;
     // Build a full-canvas preview (background + objects only; no grid or rulers)
     const buildFull = (ctx: CanvasRenderingContext2D, includeBackground: boolean) => {
@@ -1076,6 +1098,7 @@
         const cropped = cropCanvasToContent(previewCanvas);
         const url = cropped.toDataURL('image/png');
         setPreview(view, url);
+        syncDesignState();
         return;
       } catch (bgErr) {
         console.warn('[updatePreviewFor] toDataURL failed with background (likely CORS). Falling back to no background.', bgErr);
@@ -1087,6 +1110,7 @@
       const cropped = cropCanvasToContent(previewCanvas);
       const url = cropped.toDataURL('image/png');
       setPreview(view, url);
+      syncDesignState();
     } catch (err) {
       console.warn('[updatePreviewFor] failed to build full-canvas preview:', err);
     }
