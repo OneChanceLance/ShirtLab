@@ -1,5 +1,6 @@
 <template>
   <section v-if="hasVariant || !cartIsEmpty" class="checkout-card">
+
     <div class="checkout-card__summary">
       <div class="checkout-card__preview" :class="{ 'has-image': Boolean(previewImage) }">
         <img v-if="previewImage" :src="previewImage" :alt="`Preview of ${productTitle}`" />

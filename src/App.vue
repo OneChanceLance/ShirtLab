@@ -1,9 +1,6 @@
 <template>
   <div class="app-shell">
     <div class="app-shell__workspace">
-      <button class="admin-toggle" type="button" @click="toggleAdmin">
-        {{ showAdmin ? 'Close Admin' : 'Open Admin Dashboard' }}
-      </button>
       <div class="embed-wrapper">
         <div>
           <div class="embed-container">
@@ -24,8 +21,6 @@
 
     </div>
 
-    <SsActivewearMenu class="ssa-floating-menu" @variant-selected="handleVariantSelected" />
-    <AdminDashboard v-if="showAdmin" @close="showAdmin = false" @apply="handleAdminApply" />
 
   </div>
 </template>
@@ -33,9 +28,7 @@
 <script setup lang="ts">
   import { ref, computed, watch, watchEffect } from 'vue';
   import ShirtLab from './components/shirtlab/ShirtLab.vue';
-  import SsActivewearMenu from './components/SsActivewearMenu.vue';
   import MenuContent from './components/sideMenu/MenuContent.vue';
-  import AdminDashboard from './components/admin/AdminDashboard.vue';
   import CheckoutSummaryCard from './components/checkout/CheckoutSummaryCard.vue';
   import type { ImageObject, TextObject } from './components/shirtlab/types';
   import {
@@ -50,6 +43,23 @@
   import type { CheckoutColorSummary, CheckoutProductSummary } from './stores/checkout';
   import CartSlideover from './components/checkout/CartSlideover.vue';
   import CheckoutDrawer from './components/checkout/CheckoutDrawer.vue';
+  import { onMounted } from 'vue';
+
+  onMounted(() => {
+    const sendHeight = () => {
+      window.parent.postMessage(
+        { type: 'resize-iframe', height: document.body.scrollHeight },
+        '*'
+      );
+    };
+
+    // send once on load
+    sendHeight();
+
+    // observe changes to auto-resize
+    const observer = new ResizeObserver(sendHeight);
+    observer.observe(document.body);
+  });
 
   type ShirtLabExpose = {
     applyExternalClothing(payload: any): void;
@@ -76,7 +86,6 @@
   const activeMenu = ref<string>('');
   const headerTitle = ref<string>('');
   const isSelectionMenu = ref(false);
-  const showAdmin = ref(false);
   const productColors = computed(() => PRODUCT_COLORS.value);
   const lastAppliedColorKey = ref<string | null>(null);
   const checkoutStore = useCheckoutStore();
@@ -201,70 +210,6 @@
 
   function handleSendBackFromMenu() {
     shirtLabRef.value?.sendSelectedBack();
-  }
-
-  function handleVariantSelected(payload: any) {
-    const colorsList = Array.isArray(payload?.product?.colors)
-      ? payload.product.colors
-      : Array.isArray(payload?.imagery?.colors)
-        ? payload.imagery.colors
-        : [];
-    const defaultColorId = payload?.color?.id ?? payload?.product?.defaultColorId ?? null;
-    syncProductColors(colorsList, defaultColorId);
-    if (!shirtLabRef.value) return;
-    const imagery = payload?.imagery ?? {};
-    const sizeMeasurements = Array.isArray(payload?.sizeMeasurements) ? payload.sizeMeasurements : [];
-    const selectedSize = typeof payload?.size === 'string' ? payload.size : null;
-
-    if (Object.prototype.hasOwnProperty.call(payload, 'size')) {
-      setSelectedProductSize(selectedSize);
-    }
-
-    const productSummary: CheckoutProductSummary | null = payload?.product
-      ? {
-        id: String(payload.product.id ?? payload.product.style ?? 'product'),
-        name: payload.product.name ?? null,
-        brand: payload.product.brand ?? null,
-        description: payload.product.description ?? null,
-      }
-      : null;
-
-    const colorSummary: CheckoutColorSummary | null = payload?.color
-      ? {
-        id: String(payload.color.id ?? payload.color.code ?? payload.color.name ?? 'color'),
-        name: payload.color.name ?? payload.color.id ?? null,
-        hex: payload.color.hex ?? null,
-        price: parseNullableNumber(payload.color.price),
-        currency: payload.color.currency ?? null,
-        quantityMin: parseNullableNumber(payload.color.quantityMin),
-        frontUrl: imagery.front ?? payload.color.frontUrl ?? null,
-        backUrl: imagery.back ?? payload.color.backUrl ?? null,
-        sideUrl: imagery.side ?? payload.color.sideUrl ?? null,
-      }
-      : null;
-
-    checkoutStore.setVariant({
-      product: productSummary,
-      color: colorSummary,
-      size: selectedSize ?? null,
-      sizeMeasurements,
-    });
-    checkoutStore.ensureMinimumQuantity();
-
-    shirtLabRef.value.applyExternalClothing({
-      front: imagery.front,
-      back: imagery.back,
-      side: imagery.side,
-      grid: imagery.grid,
-      colors: imagery.colors,
-      bgTransform: imagery.bgTransform,
-      size: selectedSize,
-      sizeMeasurements,
-    });
-  }
-
-  function toggleAdmin() {
-    showAdmin.value = !showAdmin.value;
   }
 
   function parseNullableNumber(value: any): number | null {
@@ -441,64 +386,6 @@
 
   syncCheckoutColor();
 
-  function normalizeGrid(value: any) {
-    const grid = value || {};
-    const num = (candidate: any, fallback?: number) => {
-      const parsed = Number(candidate);
-      return Number.isFinite(parsed) ? parsed : fallback;
-    };
-
-    return {
-      x: num(grid.x, 175),
-      y: num(grid.y, 150),
-      w: num(grid.w, 250),
-      h: num(grid.h, 400),
-      widthInches: num(grid.widthInches ?? grid.physicalWidth ?? grid.widthIn ?? grid.width_in),
-      heightInches: num(grid.heightInches ?? grid.physicalHeight ?? grid.heightIn ?? grid.height_in),
-      dpi: num(grid.dpi ?? grid.pxPerInch ?? grid.pixelsPerInch ?? grid.ppi),
-      auto: grid.auto ?? grid.autoGenerated ?? null,
-      autoGenerated: grid.autoGenerated ?? grid.auto ?? null,
-    };
-  }
-
-  function handleAdminApply(record: any) {
-    showAdmin.value = false;
-    if (!shirtLabRef.value) return;
-
-    const colors = Array.isArray(record?.colors) ? record.colors : [];
-    const defaultColorId = record?.default_color_id || record?.defaultColorId || record?.defaultColorID;
-    const productSummary: CheckoutProductSummary = {
-      id: String(record?.id ?? record?.style ?? record?.sku ?? record?.code ?? 'admin-product'),
-      name: record?.name ?? record?.productName ?? record?.product_name ?? null,
-      brand: record?.brand ?? record?.brandName ?? null,
-      description: record?.description ?? record?.productDescription ?? record?.product_description ?? null,
-    };
-    checkoutStore.setProduct(productSummary);
-    if (Array.isArray(record?.size_measurements)) {
-      checkoutStore.setSizeMeasurements(record.size_measurements);
-    } else if (Array.isArray(record?.sizeMeasurements)) {
-      checkoutStore.setSizeMeasurements(record.sizeMeasurements);
-    }
-    syncProductColors(colors, defaultColorId);
-    const primaryColor = colors.find((c: any) => c?.id === defaultColorId) || colors[0] || {};
-    const backgrounds = record?.backgrounds || {};
-
-    const front = primaryColor?.frontUrl || primaryColor?.front || primaryColor?.imageUrl || backgrounds.front || null;
-    const back = primaryColor?.backUrl || primaryColor?.back || primaryColor?.imageUrl || backgrounds.back || null;
-    const side = primaryColor?.sideUrl || primaryColor?.side || backgrounds.side || null;
-    const bgTransform = primaryColor?.bgTransform || record?.bgTransform || backgrounds?.bgTransform || record?.grid?.bgTransform || null;
-
-    const grid = normalizeGrid(record?.grid);
-
-    shirtLabRef.value.applyExternalClothing({
-      grid,
-      colors,
-      front: front ?? undefined,
-      back: back ?? undefined,
-      side: side ?? undefined,
-      bgTransform: bgTransform ?? undefined,
-    });
-  }
 
 
 </script>
@@ -508,34 +395,30 @@
 
   .app-shell {
     position: relative;
-    min-height: 100vh;
+
+    width: auto;
+
     background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   }
 
   .app-shell__workspace {
-    min-height: 100vh;
-    display: flex;
+
+
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    padding: 2rem 3rem;
     box-sizing: border-box;
     gap: 1rem;
   }
 
   .embed-wrapper {
     position: relative;
-    width: 1440px;
-    max-width: 95vw;
     border-radius: 1rem;
-    overflow: hidden
+    overflow: hidden;
   }
 
   .embed-container {
-    width: 100%;
     height: 560px;
-
-    overflow: hidden;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -544,21 +427,6 @@
     position: relative;
   }
 
-
-  @media (max-width: 1200px) {
-    .checkout-overlay {
-      position: static;
-      width: 100%;
-      margin-top: 1.5rem;
-    }
-
-    .embed-wrapper {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 1.5rem;
-    }
-  }
 
   @media (max-width: 768px) {
     .embed-container {

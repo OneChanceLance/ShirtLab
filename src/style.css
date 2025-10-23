@@ -6,8 +6,8 @@
   color-scheme: light dark;
   color: rgb(0, 0, 0);
   background-color: #000000;
-  width: 100vw;
-
+  width: auto;
+  height: auto;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

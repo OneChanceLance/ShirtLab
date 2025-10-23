@@ -1,7 +1,7 @@
 <template>
   <transition name="clothing-overlay-fade">
     <div v-if="show" class="clothing-overlay" role="dialog" aria-modal="true">
-      <div class="clothing-overlay__panel">
+      <div :class="['clothing-overlay__panel', { 'clothing-overlay__panel--compact': compactPanel }]">
         <div class="clothing-overlay__filters">
           <div class="search-bar" role="search">
             <span class="search-bar__icon" aria-hidden="true">
@@ -259,6 +259,8 @@
   const selectedGenderLabel = computed(() =>
     genderOptions.find(opt => opt.id === props.selectedGender)?.label || 'All'
   );
+
+  const compactPanel = computed(() => props.filteredClothing.length > 0 && props.filteredClothing.length <= 4);
 </script>
 
 <style scoped lang="scss">
@@ -267,25 +269,34 @@
     inset: 0;
     display: flex;
     justify-content: center;
+    align-items: flex-start;
 
-    background: rgba(15, 23, 42, 0.55);
+    background: #fff;
     z-index: 5000;
     transition: all 0.2s ease;
+
   }
 
   .clothing-overlay__panel {
     background: #fff;
-
-    width: 100%;
+    width: min(1200px, 100%);
+    max-width: min(1200px, 100%);
+    margin: 0 auto;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
     padding: 2rem;
-    box-shadow: 0 30px 60px rgba(15, 23, 42, 0.28);
+
     max-height: 100%;
     overflow: hidden;
   }
+
+  .clothing-overlay__panel--compact {
+    width: auto;
+    max-width: min(920px, 100%);
+  }
+
 
   .clothing-overlay__filters {
     display: flex;
@@ -306,6 +317,7 @@
     width: 100%;
     box-sizing: border-box;
     padding: 0.7rem 1.1rem;
+    flex-wrap: wrap;
 
 
     border-bottom: 1px solid rgba(148, 163, 184, 0.25);
@@ -364,6 +376,7 @@
     display: flex;
     gap: 1rem;
     padding: 0.75rem 0.9rem;
+    flex-wrap: wrap;
 
   }
 
@@ -372,6 +385,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
+    flex: 1 1 220px;
+    min-width: 200px;
   }
 
   .filter-label {
@@ -469,9 +484,21 @@
     }
   }
 
+  @media (max-width: 900px) {
+    .filter-group {
+      flex: 1 1 45%;
+      min-width: 0;
+    }
+  }
+
   @media (max-width: 720px) {
     .filter-dropdowns {
-      grid-template-columns: 1fr;
+      flex-direction: column;
+      padding: 0.5rem 0.9rem;
+    }
+
+    .filter-group {
+      flex: 1 1 100%;
     }
   }
 
@@ -580,6 +607,13 @@
 
     .clothing-overlay__panel {
       padding: 1.5rem;
+      width: 100%;
+      max-width: 100%;
+    }
+
+    .clothing-overlay__panel--compact {
+      width: 100%;
+      max-width: 100%;
     }
 
     .clothing-grid {
