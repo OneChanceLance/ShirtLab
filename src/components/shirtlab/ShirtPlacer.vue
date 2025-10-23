@@ -47,7 +47,12 @@
           @select="handleViewSelect" />
       </div>
 
-      <input type="button" @click="showGrid = !showGrid" :value="showGrid ? 'Hide Grid' : 'Show Grid'" />
+      <button v-if="changeButtonVisible" type="button" class="sidebar__button" @click="requestGarmentChange">
+        Change Garment
+      </button>
+      <button type="button" class="sidebar__button" @click="toggleGrid">
+        {{ showGrid ? 'Hide Grid' : 'Show Grid' }}
+      </button>
 
     </div>
 
@@ -55,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-  import { onMounted, onUnmounted, watch, ref, reactive } from 'vue';
+  import { computed, onMounted, onUnmounted, watch, ref, reactive } from 'vue';
 
   import DeleteIcon from 'vue-material-design-icons/Close.vue'
   import DuplicateIcon from 'vue-material-design-icons/ContentDuplicate.vue'
@@ -69,6 +74,13 @@
   import { getAABB, getAABBCorners, getRotatedCorners, pointInRotatedRect } from './utils/geometry';
   import { useDesignLayers } from './composables/useDesignLayers';
   import { createGridState, hydrateSizeMeasurements, type DesignGrid, type View } from './composables/useGrid';
+  import { useCheckoutStore } from '../../stores/checkout';
+  import type {
+    SerializedDesignState,
+    SerializedImageObject,
+    SerializedTextObject,
+    SerializedDesignView,
+  } from '../../types/designState';
 
   const props = defineProps<{
     clothing?: {
@@ -91,8 +103,18 @@
       };
       colors?: Array<{ background?: string; sideUrl?: string; side?: string }>; // legacy fallback
     }
+    showChangeGarmentButton?: boolean;
   }>();
 
+  const emit = defineEmits<{
+    (event: 'request-change-garment'): void;
+  }>();
+
+  function requestGarmentChange() {
+    emit('request-change-garment');
+  }
+
+  const changeButtonVisible = computed(() => props.showChangeGarmentButton !== false);
 
 
 
@@ -100,6 +122,7 @@
   const iconComponents = [DeleteIcon, ResizeIcon, DuplicateIcon, RotateIcon];
   const textIconComponents = [DeleteIcon, ArrowLeftRight, DuplicateIcon, RotateIcon];
   const fallbackPreview = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+  const checkoutStore = useCheckoutStore();
 
   // -----------------------------------------------------
   // Reactive State & Composables
@@ -501,6 +524,10 @@
     resetClothingDetails,
   } = createGridState(DEFAULT_GRID);
 
+  function toggleGrid() {
+    showGrid.value = !showGrid.value;
+  }
+
   // -----------------------------------------------------
   // View Management
   // -----------------------------------------------------
@@ -738,6 +765,18 @@
   const frontPreview = ref<string>('');
   const backPreview = ref<string>('');
 
+  watch(frontPreview, (url) => {
+    checkoutStore.setDesignPreview('Front', url || null);
+  }, { immediate: true });
+
+  watch(backPreview, (url) => {
+    checkoutStore.setDesignPreview('Back', url || null);
+  }, { immediate: true });
+
+  watch(selectedView, (view) => {
+    checkoutStore.setActiveDesignView(view);
+  }, { immediate: true });
+
   function refreshAllPreviews() {
     for (const view of ALL_VIEWS) {
       const src = viewToSrc[view] || fallbackPreview;
@@ -769,6 +808,92 @@
         options: { ...item.effect.options },
       },
     };
+  }
+
+  function serializeImageObject(item: ImageObject): SerializedImageObject {
+    const { img, isSelected, showHandles, ...rest } = item;
+    return {
+      ...rest,
+      imgUrl: item.imgUrl,
+      showHandles: showHandles ?? true,
+      isVector: item.isVector ?? rest.isVector,
+      name: item.name,
+      shapeMeta: item.shapeMeta ? { ...item.shapeMeta } : undefined,
+    };
+  }
+
+  function serializeTextObject(item: TextObject): SerializedTextObject {
+    const { isSelected, showHandles, effect, ...rest } = item;
+    const safeEffect = effect || { name: 'none', options: withDefaults('none') };
+    return {
+      ...rest,
+      showHandles: showHandles ?? true,
+      effect: {
+        name: safeEffect.name,
+        options: { ...withDefaults(safeEffect.name, safeEffect.options) },
+      },
+    };
+  }
+
+  function deserializeImageObject(source: SerializedImageObject): ImageObject {
+    return {
+      ...source,
+      showHandles: source.showHandles ?? true,
+      isSelected: false,
+    } as ImageObject;
+  }
+
+  function deserializeTextObject(source: SerializedTextObject): TextObject {
+    return {
+      ...source,
+      showHandles: source.showHandles ?? true,
+      isSelected: false,
+      effect: {
+        name: source.effect?.name ?? 'none',
+        options: withDefaults(source.effect?.name ?? 'none', source.effect?.options),
+      },
+    } as TextObject;
+  }
+
+  function exportDesignState(): SerializedDesignState {
+    storeViewState(selectedView.value);
+    const buildView = (view: View): SerializedDesignView => {
+      const state = viewStates[view] ?? { images: [], texts: [] };
+      return {
+        images: state.images.map(serializeImageObject),
+        texts: state.texts.map(serializeTextObject),
+      };
+    };
+    return {
+      activeView: selectedView.value,
+      views: {
+        Front: buildView('Front'),
+        Back: buildView('Back'),
+      },
+    };
+  }
+
+  function applyDesignState(state: SerializedDesignState | null) {
+    if (!state) {
+      resetDesignState('Front');
+      return;
+    }
+
+    const nextViews = state.views ?? { Front: { images: [], texts: [] }, Back: { images: [], texts: [] } };
+    viewStates.Front = {
+      images: (nextViews.Front?.images ?? []).map(deserializeImageObject),
+      texts: (nextViews.Front?.texts ?? []).map(deserializeTextObject),
+    };
+    viewStates.Back = {
+      images: (nextViews.Back?.images ?? []).map(deserializeImageObject),
+      texts: (nextViews.Back?.texts ?? []).map(deserializeTextObject),
+    };
+
+    const targetView = (state.activeView === 'Back' ? 'Back' : 'Front') as View;
+    selectedView.value = targetView;
+    loadViewState(targetView);
+    refreshAllPreviews();
+    draw();
   }
 
   /**
@@ -2072,6 +2197,8 @@
     bringSelectedForward,
     sendSelectedBack,
     clearClothing,
+    exportDesignState,
+    applyDesignState,
   });
 
 
@@ -2146,67 +2273,60 @@
       margin: 0 auto;
       padding-right: 5px;
     }
+  }
 
-    input {
-      cursor: pointer;
-      object-fit: contain;
-      background: linear-gradient(180deg, #ffffff, #f6f8fb);
-      padding: 0.3rem 0.5rem;
-      font-family: 'Anek Latin';
-      font-size: 0.7rem;
-      font-weight: 300;
-      border-radius: 0.5rem;
-      display: flex;
-      flex-direction: column;
-      text-align: center;
-      justify-content: center;
-      margin: 0 auto;
-      color: black;
-      width: 100%;
-      height: 100%;
-      border: none;
-      position: relative;
-      /* for ripple */
-      overflow: hidden;
-      /* clip ripple */
-      will-change: transform, box-shadow, background;
-      transform-origin: center;
-      transition: transform 140ms ease, box-shadow 200ms ease, background 220ms ease;
-      box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  .sidebar__button {
+    cursor: pointer;
+    object-fit: contain;
+    background: linear-gradient(180deg, #ffffff, #f6f8fb);
+    padding: 0.3rem 0.5rem;
+    font-family: 'Anek Latin';
+    font-size: 0.7rem;
+    font-weight: 300;
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    text-align: center;
+    justify-content: center;
+    margin: 0 auto;
+    color: black;
+    width: 100%;
+    height: 100%;
+    border: none;
+    position: relative;
+    overflow: hidden;
+    will-change: transform, box-shadow, background;
+    transform-origin: center;
+    transition: transform 140ms ease, box-shadow 200ms ease, background 220ms ease;
+    box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  }
 
-      /* subtle hover lift */
-      &:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
-        background: linear-gradient(180deg, #ffffff, #eef2f7);
-      }
+  .sidebar__button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+    background: linear-gradient(180deg, #ffffff, #eef2f7);
+  }
 
-      /* press state with ripple */
-      &:active {
-        transform: translateY(0) scale(0.98);
-      }
+  .sidebar__button:active {
+    transform: translateY(0) scale(0.98);
+  }
 
-      /* center ripple */
-      &::after {
-        content: "";
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: rgba(167, 197, 102, 0.35);
-        /* matches green accent */
-        transform: translate(-50%, -50%) scale(0);
-        opacity: 0;
-        pointer-events: none;
-      }
+  .sidebar__button::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(167, 197, 102, 0.35);
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0;
+    pointer-events: none;
+  }
 
-      &:active::after {
-        animation: ripple 420ms ease-out;
-      }
-    }
-
+  .sidebar__button:active::after {
+    animation: ripple 420ms ease-out;
   }
 
 
@@ -2228,15 +2348,15 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .sidebar input {
+    .sidebar__button {
       transition: none;
     }
 
-    .sidebar input:active {
+    .sidebar__button:active {
       transform: none;
     }
 
-    .sidebar input::after {
+    .sidebar__button::after {
       animation: none !important;
     }
   }

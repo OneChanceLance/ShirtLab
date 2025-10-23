@@ -2,7 +2,7 @@ export type ImageObject = {
     id: string;
     type: 'image';
     imgUrl: string;
-    img: HTMLImageElement;
+    img?: HTMLImageElement;
     showHandles: boolean, // 👈 default to true
     x: number;
     y: number;

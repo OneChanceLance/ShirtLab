@@ -3,13 +3,14 @@
     @request-menu="(menu: string, title: string) => emit('request-menu', menu, title)" />
   <CanvasArea>
     <div class="shirtlab-stage">
-      <button v-if="!showClothingPicker" type="button" class="clothing-overlay__toggle" @click="openClothingPicker">
-        Change Garment
-      </button>
-      <ShirtPlacer ref="shirtPlacerRef" />
+      <ShirtPlacer ref="shirtPlacerRef" :show-change-garment-button="!showClothingPicker"
+        @request-change-garment="openClothingPicker" />
 
     </div>
   </CanvasArea>
+
+
+
   <ClothingOverlay v-bind="overlayConfig" @apply="applyClothingItem" />
 </template>
 
@@ -21,11 +22,16 @@
   import ShirtPlacer from './ShirtPlacer.vue';
   import ClothingOverlay, { type ClothingOverlayProps } from './ClothingOverlay.vue';
   import { getClothesByAnyCode, getClothingItemById, getClothingItemByAnyCode } from './clothesDb';
-  import { setProductColors, setSelectedProductColorIndex, setSelectedProductSize, selectedProductSize } from '../sideMenu/types/colorList';
+  import { PRODUCT_COLORS, selectedProductColorIndex, setProductColors, setSelectedProductColorIndex, setSelectedProductSize, selectedProductSize } from '../sideMenu/types/colorList';
   import { supabase } from '../../supabase';
   import type { ClothingItemRow } from './clothesDb';
   import { findMeasurementForSize, normalizeSizeLabel } from '../../utils/sizeMeasurements';
   import type { SizeMeasurementEntry, SizeMeasurementSpec } from '../../utils/sizeMeasurements';
+import { useCheckoutStore } from '../../stores/checkout';
+import type { CheckoutColorSummary, CheckoutProductSummary } from '../../stores/checkout';
+  import CheckoutDrawer from '../checkout/CheckoutDrawer.vue';
+  import CartSlideover from '../checkout/CartSlideover.vue';
+  import type { SerializedDesignState } from '../../types/designState';
 
   const props = defineProps<{ activeMenu?: string | null }>();
   const emit = defineEmits<{ (e: 'request-menu', menu: string, title: string): void; }>();
@@ -55,6 +61,100 @@
   const currentSizeMeasurements = ref<SizeMeasurementEntry[]>([]);
 
   const shirtPlacerRef = ref();
+  const checkoutStore = useCheckoutStore();
+
+  function cloneValue<T>(value: T): T {
+    if (value === null || value === undefined) return value;
+    try {
+      return structuredClone(value);
+    } catch {
+      return JSON.parse(JSON.stringify(value));
+    }
+  }
+
+  function cleanString(value: any): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : null;
+  }
+
+  function toNullableNumber(value: any): number | null {
+    const converted = toNumber(value, Number.NaN);
+    return Number.isFinite(converted) ? converted : null;
+  }
+
+  function buildColorSummary(color: any, index: number): CheckoutColorSummary | null {
+    if (!color) return null;
+    const frontUrl = resolveColorImage(color, 'front');
+    const backUrl = resolveColorImage(color, 'back');
+    const sideUrl = resolveColorImage(color, 'side');
+    return {
+      id: String(color?.id ?? color?.colorStyleID ?? index),
+      name: cleanString(color?.name ?? color?.colorName) ?? `Color ${index + 1}`,
+      hex: cleanString(color?.hex ?? color?.colorBackground ?? color?.color ?? color?.background),
+      price: toNullableNumber(color?.price ?? color?.salePrice ?? color?.unitPrice),
+      currency: cleanString(color?.currency ?? color?.currencyCode),
+      quantityMin: toNullableNumber(color?.quantityMin ?? color?.minimumQuantity ?? color?.minQty),
+      frontUrl: frontUrl ?? null,
+      backUrl: backUrl ?? null,
+      sideUrl: sideUrl ?? null,
+    };
+  }
+
+  async function applyStoredDesign(definition: Record<string, any> | null, designState: SerializedDesignState | null) {
+    if (definition) {
+      if (Array.isArray(definition.colors)) {
+        setProductColors(definition.colors);
+        let nextIndex = typeof definition.selectedColorIndex === 'number' ? definition.selectedColorIndex : -1;
+        if (definition.selectedColorId) {
+          const matchIdx = definition.colors.findIndex((color: any) =>
+            String(color?.id ?? color?.colorStyleID ?? color?.colorId) === String(definition.selectedColorId));
+          if (matchIdx >= 0) nextIndex = matchIdx;
+        }
+        if (!(nextIndex >= 0 && nextIndex < definition.colors.length)) {
+          nextIndex = 0;
+        }
+        setSelectedProductColorIndex(nextIndex, { skipSizeSync: true });
+        const selectedColor = definition.colors[nextIndex] ?? null;
+        const colorSummary = buildColorSummary(selectedColor, nextIndex);
+        if (colorSummary) {
+          checkoutStore.setColor(colorSummary);
+        }
+      }
+      if (Array.isArray(definition.sizeMeasurements)) {
+        currentSizeMeasurements.value = definition.sizeMeasurements;
+        checkoutStore.setSizeMeasurements(definition.sizeMeasurements);
+      }
+      if (Object.prototype.hasOwnProperty.call(definition, 'size')) {
+        const nextSize = typeof definition.size === 'string' ? definition.size : null;
+        setSelectedProductSize(nextSize);
+      }
+      checkoutStore.setClothingDefinition(cloneValue(definition));
+      shirtPlacerRef.value?.updateClothing(cloneValue(definition));
+    }
+    await nextTick();
+    const stateClone = designState ? cloneValue(designState) : null;
+    if (stateClone) {
+      shirtPlacerRef.value?.applyDesignState(stateClone);
+    } else if (!definition) {
+      shirtPlacerRef.value?.applyDesignState(null);
+    }
+    checkoutStore.setDesignState(stateClone);
+  }
+
+  function handleOpenClothingPickerRequest(_event?: Event) {
+    openClothingPicker();
+  }
+
+  onMounted(() => {
+    checkoutStore.registerDesignStateProvider(() => shirtPlacerRef.value?.exportDesignState?.() ?? null);
+    window.addEventListener('shirtlab:open-clothing-picker', handleOpenClothingPickerRequest);
+  });
+
+  onBeforeUnmount(() => {
+    window.removeEventListener('shirtlab:open-clothing-picker', handleOpenClothingPickerRequest);
+    checkoutStore.registerDesignStateProvider(null);
+  });
 
   const overlayLoading = computed(() => clothingLoading.value || categoriesLoading.value || subcategoriesLoading.value);
   const overlayError = computed(() => clothingError.value || categoryError.value || subcategoryError.value);
@@ -582,11 +682,62 @@
     },
   }));
 
-  watch(selectedProductSize, (size) => {
+  watch(selectedProductSize, async (size) => {
+    const snapshot = checkoutStore.captureDesignState();
     const update: Record<string, any> = { size: size ?? null };
     update.sizeMeasurements = currentSizeMeasurements.value;
     shirtPlacerRef.value?.updateClothing(update);
+
+    const definition = checkoutStore.clothingDefinition ? cloneValue(checkoutStore.clothingDefinition) : {};
+    definition.size = update.size;
+    definition.sizeMeasurements = update.sizeMeasurements;
+    checkoutStore.setClothingDefinition(definition);
+
+    await nextTick();
+    if (snapshot) {
+      const cloned = cloneValue(snapshot);
+      shirtPlacerRef.value?.applyDesignState(cloned);
+      checkoutStore.setDesignState(cloned);
+    }
   });
+
+  watch(() => selectedProductColorIndex.value, (index) => {
+    if (!checkoutStore.clothingDefinition) return;
+    const colors = cloneValue(PRODUCT_COLORS.value);
+    if (!Array.isArray(colors) || !colors.length) return;
+    let nextIndex = typeof index === 'number' ? index : 0;
+    if (!(nextIndex >= 0 && nextIndex < colors.length)) nextIndex = 0;
+    const selectedColor = colors[nextIndex] ?? null;
+    const updatedDefinition = cloneValue(checkoutStore.clothingDefinition) ?? {};
+    updatedDefinition.colors = colors;
+    updatedDefinition.selectedColorIndex = nextIndex;
+    updatedDefinition.selectedColorId = selectedColor ? String(selectedColor?.id ?? selectedColor?.colorStyleID ?? nextIndex) : null;
+    checkoutStore.setClothingDefinition(updatedDefinition);
+    const summary = buildColorSummary(selectedColor, nextIndex);
+    if (summary) {
+      checkoutStore.setColor(summary);
+    }
+  });
+
+  watch(
+    () => [checkoutStore.editingCartItemId, checkoutStore.editingSessionVersion] as const,
+    async ([id]) => {
+      if (!id) return;
+      const definition = checkoutStore.clothingDefinition ? cloneValue(checkoutStore.clothingDefinition) : null;
+      const state = checkoutStore.designState ? cloneValue(checkoutStore.designState) : null;
+      await applyStoredDesign(definition, state);
+    },
+  );
+
+  watch(
+    () => checkoutStore.editingCancelVersion,
+    async () => {
+      if (checkoutStore.editingCartItemId) return;
+      const definition = checkoutStore.clothingDefinition ? cloneValue(checkoutStore.clothingDefinition) : null;
+      const state = checkoutStore.designState ? cloneValue(checkoutStore.designState) : null;
+      await applyStoredDesign(definition, state);
+    },
+  );
 
   function openClothingPicker() {
     showClothingPicker.value = true;
@@ -679,6 +830,13 @@
       clothingError.value = 'Selected style has no colors with side previews.';
       return;
     }
+    const productSummary: CheckoutProductSummary = {
+      id: String((item as any)?.id ?? (item as any)?.style ?? (item as any)?.sku ?? (item as any)?.code ?? 'clothing-item'),
+      name: cleanString((item as any)?.name ?? (item as any)?.productName ?? (item as any)?.product_name),
+      brand: cleanString((item as any)?.brand ?? (item as any)?.brandName ?? (item as any)?.brand_name),
+      description: cleanString((item as any)?.description ?? (item as any)?.productDescription ?? (item as any)?.product_description),
+    };
+
     setProductColors(colors);
     const defaultColorId = (item as any)?.default_color_id ?? (item as any)?.defaultColorId ?? (item as any)?.defaultColorID ?? null;
     let selectedIndex = colors.findIndex((color: any) => color?.id === defaultColorId);
@@ -688,6 +846,7 @@
 
     const sizeMeasurements = normalizeSizeMeasurements((item as any)?.size_measurements ?? (item as any)?.sizeMeasurements);
     currentSizeMeasurements.value = sizeMeasurements;
+    checkoutStore.setSizeMeasurements(sizeMeasurements);
 
     const colorSizeList = Array.isArray((chosenColor as any)?.sizes)
       ? (chosenColor as any).sizes
@@ -742,6 +901,8 @@
       front,
       back,
       side,
+      selectedColorId: String((chosenColor as any)?.id ?? (chosenColor as any)?.colorStyleID ?? selectedIndex),
+      selectedColorIndex: selectedIndex,
     };
 
     payload.sizeMeasurements = sizeMeasurements;
@@ -757,6 +918,27 @@
         scale: toNumber(transform.scale, 1),
       };
     }
+
+    const colorSummary = {
+      id: String((chosenColor as any)?.id ?? (chosenColor as any)?.colorStyleID ?? selectedIndex),
+      name: cleanString((chosenColor as any)?.name ?? (chosenColor as any)?.colorName) ?? `Color ${selectedIndex + 1}`,
+      hex: cleanString((chosenColor as any)?.hex ?? (chosenColor as any)?.colorBackground ?? (chosenColor as any)?.color ?? (chosenColor as any)?.background),
+      price: toNullableNumber((chosenColor as any)?.price ?? (chosenColor as any)?.salePrice ?? (chosenColor as any)?.unitPrice),
+      currency: cleanString((chosenColor as any)?.currency ?? (chosenColor as any)?.currencyCode),
+      quantityMin: toNullableNumber((chosenColor as any)?.quantityMin ?? (chosenColor as any)?.minimumQuantity ?? (chosenColor as any)?.minQty),
+      frontUrl: front ?? null,
+      backUrl: back ?? null,
+      sideUrl: side ?? null,
+    };
+    checkoutStore.setVariant({
+      product: productSummary,
+      color: colorSummary,
+      size: (selectedProductSize.value ?? initialSize) ?? null,
+      sizeMeasurements,
+    });
+    checkoutStore.ensureMinimumQuantity();
+    checkoutStore.setClothingDefinition(payload);
+    checkoutStore.finishEditingCartItem();
 
     shirtPlacerRef.value?.updateClothing(payload);
     const itemId = (item as any)?.id;
@@ -887,6 +1069,12 @@
           auto: gridJson.auto ?? gridJson.autoGenerated ?? null,
           autoGenerated: gridJson.autoGenerated ?? gridJson.auto ?? null,
         };
+        const productSummary: CheckoutProductSummary = {
+          id: String((item as any)?.id ?? (item as any)?.style ?? (item as any)?.sku ?? (item as any)?.code ?? code),
+          name: cleanString((item as any)?.name ?? (item as any)?.productName ?? (item as any)?.product_name),
+          brand: cleanString((item as any)?.brand ?? (item as any)?.brandName ?? (item as any)?.brand_name),
+          description: cleanString((item as any)?.description ?? (item as any)?.productDescription ?? (item as any)?.product_description),
+        };
 
         const colorsArr: any[] = sanitizeColors(item.colors);
         if (!colorsArr.length) {
@@ -909,6 +1097,7 @@
         const c = colorsArr[selectedIdx] ?? colorsArr[0] ?? {};
         const sizeMeasurements = normalizeSizeMeasurements((item as any)?.size_measurements ?? (item as any)?.sizeMeasurements);
         currentSizeMeasurements.value = sizeMeasurements;
+        checkoutStore.setSizeMeasurements(sizeMeasurements);
         const colorSizeList = Array.isArray(c?.sizes)
           ? c.sizes
             .map((size: any) => typeof size === 'string' ? size.trim() : typeof size === 'number' ? String(size) : '')
@@ -941,6 +1130,29 @@
           offsetY: Number(bgT.offsetY ?? 0),
           scale: Number(bgT.scale ?? 1),
         };
+
+        const toNullableNumber = (value: any) => {
+          const converted = parseNum(value, Number.NaN);
+          return Number.isFinite(converted) ? converted : null;
+        };
+        const colorSummary = {
+          id: String(c?.id ?? c?.colorStyleID ?? selectedIdx),
+          name: cleanString(c?.name ?? c?.colorName) ?? `Color ${selectedIdx + 1}`,
+          hex: cleanString(c?.hex ?? c?.colorBackground ?? c?.color ?? c?.background),
+          price: toNullableNumber(c?.price ?? c?.salePrice ?? c?.unitPrice),
+          currency: cleanString(c?.currency ?? c?.currencyCode),
+          quantityMin: toNullableNumber(c?.quantityMin ?? c?.minimumQuantity ?? c?.minQty),
+          frontUrl: useFront ?? null,
+          backUrl: useBack ?? null,
+          sideUrl: useSide ?? null,
+        };
+        checkoutStore.setVariant({
+          product: productSummary,
+          color: colorSummary,
+          size: selectedProductSize.value ?? initialSize ?? null,
+          sizeMeasurements,
+        });
+        checkoutStore.ensureMinimumQuantity();
 
         shirtPlacerRef.value?.updateClothing({
           front: useFront,
@@ -987,6 +1199,12 @@
         auto: null,
         autoGenerated: null,
       };
+      const productSummary: CheckoutProductSummary = {
+        id: String(row?.id ?? row?.style ?? row?.sku ?? row?.code ?? code),
+        name: cleanString(row?.name ?? row?.product_name),
+        brand: cleanString(row?.brand ?? row?.brand_name),
+        description: cleanString(row?.description ?? row?.product_description),
+      };
       const colorsArr = Array.isArray((row as any).colors) ? (row as any).colors : [];
       let selectedIdx = Number.isInteger(colorIndex) ? colorIndex : 0;
       if (colorsArr.length) {
@@ -1003,6 +1221,7 @@
       }
       const selectedColor = colorsArr[selectedIdx] ?? colorsArr[0] ?? {};
       currentSizeMeasurements.value = [];
+      checkoutStore.setSizeMeasurements([]);
       const legacySizes = Array.isArray(selectedColor?.sizes)
         ? selectedColor.sizes
           .map((size: any) => typeof size === 'string' ? size.trim() : typeof size === 'number' ? String(size) : '')
@@ -1026,6 +1245,26 @@
           offsetY: Number(row.bg_offset_y ?? row.bgY ?? 0),
           scale: Number(row.bg_scale ?? row.bgScale ?? 1),
         };
+      const colorSummary = colorsArr.length
+        ? {
+          id: String(selectedColor?.id ?? selectedColor?.colorStyleID ?? selectedIdx),
+          name: cleanString(selectedColor?.name ?? selectedColor?.colorName) ?? `Color ${selectedIdx + 1}`,
+          hex: cleanString(selectedColor?.hex ?? selectedColor?.colorBackground ?? selectedColor?.color ?? selectedColor?.background),
+          price: toNullableNumber(selectedColor?.price ?? selectedColor?.salePrice ?? selectedColor?.unitPrice),
+          currency: cleanString(selectedColor?.currency ?? selectedColor?.currencyCode),
+          quantityMin: toNullableNumber(selectedColor?.quantityMin ?? selectedColor?.minimumQuantity ?? selectedColor?.minQty),
+          frontUrl: useFront ?? null,
+          backUrl: useBack ?? null,
+          sideUrl: useSide ?? null,
+        }
+        : null;
+      checkoutStore.setVariant({
+        product: productSummary,
+        color: colorSummary,
+        size: legacyInitialSize ?? null,
+        sizeMeasurements: [],
+      });
+      checkoutStore.ensureMinimumQuantity();
       shirtPlacerRef.value?.updateClothing({
         front: useFront,
         back: useBack,

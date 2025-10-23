@@ -16,6 +16,7 @@
     "fabric": "^6.7.0",
     "firebase": "^11.9.1",
     "pinia": "^3.0.3",
+    "stripe": "^19.1.0",
     "three": "^0.178.0",
     "vue": "^3.5.17",
     "vue-material-design-icons": "^5.3.1"
