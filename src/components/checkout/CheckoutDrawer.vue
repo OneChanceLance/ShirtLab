@@ -115,7 +115,7 @@
                   <div class="checkout-form__grid">
                     <label>
                       <span>Full name</span>
-                      <input type="text" v-model="fullNameField" placeholder="Alex Taylor" />
+                      <input type="text" v-model="fullNameField" placeholder="Alex Taylor" required />
                     </label>
                     <label>
                       <span>Email</span>
@@ -133,11 +133,11 @@
                           formatted = `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
                         }
                         phoneField = formatted;
-                      })($event)" placeholder="(555) 123-4567" />
+                      })($event)" placeholder="(555) 123-4567" required />
                     </label>
                     <label>
                       <span>Company</span>
-                      <input type="text" v-model="companyField" placeholder="Your company" />
+                      <input type="text" v-model="companyField" placeholder="Your company (optional)" />
                     </label>
                     <label class="checkout-form__notes">
                       <span>Order notes</span>
@@ -165,7 +165,8 @@
                                   {{ designChargeMeta(charge) }}
                                 </small>
                               </span>
-                              <strong>{{ formatCurrency(charge.charge, detail.currency ?? cartStore.firstCurrency ?? 'USD') }}</strong>
+                              <strong>{{ formatCurrency(charge.charge, detail.currency ?? cartStore.firstCurrency ??
+                                'USD') }}</strong>
                             </li>
                           </ul>
                         </div>
@@ -185,17 +186,19 @@
                     </div>
                     <div class="checkout-summary__section summary-taxes">
                       <div class="checkout-summary__item summary-tax">
-                        <span>Sales tax ({{ (TAX_RATE * 100).toFixed(1) }}%)</span>
+                        <span>Tax: </span>
                         <strong>{{ cartPricingSummary.taxLabel ?? '—' }}</strong>
                       </div>
                       <div class="checkout-summary__item summary-tax">
-                        <span>Stripe processing ({{ (STRIPE_PERCENT * 100).toFixed(1) }}% + {{ formatCurrency(STRIPE_FIXED, cartPricingSummary.currency ?? cartStore.firstCurrency ?? 'USD') }})</span>
+                        <span>Processing fee:</span>
                         <strong>{{ cartPricingSummary.stripeFeeLabel ?? '—' }}</strong>
                       </div>
                     </div>
                     <div class="checkout-summary__total">
                       <span>Total due today</span>
-                      <strong>{{ formatCurrency((cartPricingSummary.finalTotal + cartPricingSummary.taxAmount + cartPricingSummary.stripeFees), cartPricingSummary.currency ?? cartStore.firstCurrency ?? 'USD') ?? '—' }}</strong>
+                      <strong>{{ formatCurrency((cartPricingSummary.finalTotal + cartPricingSummary.taxAmount +
+                        cartPricingSummary.stripeFees), cartPricingSummary.currency ?? cartStore.firstCurrency ?? 'USD')
+                        ?? '—' }}</strong>
                     </div>
                   </div>
 
@@ -269,7 +272,7 @@
             </button>
             <button v-else-if="currentStep === 2" type="submit" class="checkout-form__submit"
               form="checkout-contact-form" :disabled="submitting">
-              {{ submitting ? 'Submitting…' : 'Submit Order' }}
+              {{ submitting ? 'Proceeding...' : 'Proceed to Payment' }}
             </button>
             <button v-else-if="currentStep === 3" type="button" class="checkout-form__submit"
               :disabled="!paymentFormReady || paymentProcessing" @click="confirmPayment">
@@ -2180,16 +2183,6 @@
     background: rgba(248, 113, 113, 0.3);
   }
 
-  .checkout-summary {
-    background: linear-gradient(140deg, rgba(226, 232, 240, 0.6), rgba(148, 163, 184, 0.18));
-    border-radius: 1.4rem;
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    padding: clamp(1.1rem, 2.8vw, 1.6rem);
-    box-shadow: 0 20px 36px rgba(15, 23, 42, 0.12);
-    display: flex;
-
-    gap: 1.25rem;
-  }
 
   .checkout-summary .eyebrow {
     font-size: 0.75rem;
@@ -2377,17 +2370,11 @@
     gap: 1.25rem;
     padding: 1.5rem;
     border-radius: 1.25rem;
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.85), rgba(241, 245, 249, 0.65));
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    box-shadow: 0 24px 48px rgba(15, 23, 42, 0.15);
+
+
     transition: all 0.3s ease;
   }
 
-  .checkout-summary:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 32px 64px rgba(15, 23, 42, 0.2);
-  }
 
   .checkout-summary__section {
     display: flex;
@@ -2458,6 +2445,7 @@
   .summary-item__title {
     color: #0f172a;
     font-weight: 600;
+    text-align: left;
   }
 
   .summary-item__charges {

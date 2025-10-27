@@ -478,9 +478,9 @@
   function matchesGenderFilter(genderCodes: string[], filter: string): boolean {
     if (!filter || filter === 'all') return true;
     if (!genderCodes.length) return false;
-    if (filter === 'men') return genderCodes.includes('men') || genderCodes.includes('unisex');
-    if (filter === 'women') return genderCodes.includes('women') || genderCodes.includes('unisex');
     if (filter === 'unisex') return genderCodes.includes('unisex');
+    if (filter === 'women') return genderCodes.includes('women');
+
     return false;
   }
 

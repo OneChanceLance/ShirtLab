@@ -10,6 +10,8 @@
       @click="() => requestMenu('Shapes', 'Choose Shape')" />
     <MenuButton variant="Colors" label="Product Colors" :active="props.activeMenu === 'Colors'"
       @click="() => requestMenu('Colors', 'Pick a Product Color')" />
+    <MenuButton variant="Book" label="HOW TO USE" :active="props.activeMenu === 'Guide'"
+      @click="() => requestMenu('Guide', 'ShirtLab Guide')" />
     <!--*<MenuButton variant="Sports" label="Sports Personalization" :active="props.activeMenu === 'Sports'"
       @click="() => requestMenu('Sports', 'Add Sports Info')" /> -->
   </nav>

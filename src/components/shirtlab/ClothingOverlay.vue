@@ -252,7 +252,6 @@
   );
   const genderOptions: Option[] = [
     { id: 'all', label: 'All' },
-    { id: 'men', label: 'Men' },
     { id: 'women', label: 'Women' },
     { id: 'unisex', label: 'Unisex' },
   ];
@@ -287,7 +286,7 @@
     flex-direction: column;
     gap: 1.5rem;
     padding: 2rem;
-
+    height: 100%;
     max-height: 100%;
     overflow: hidden;
   }
