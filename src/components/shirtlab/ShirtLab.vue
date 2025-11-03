@@ -22,7 +22,17 @@
   import ShirtPlacer from './ShirtPlacer.vue';
   import ClothingOverlay, { type ClothingOverlayProps } from './ClothingOverlay.vue';
   import { getClothesByAnyCode, getClothingItemById, getClothingItemByAnyCode } from './clothesDb';
-  import { PRODUCT_COLORS, selectedProductColorIndex, setProductColors, setSelectedProductColorIndex, setSelectedProductSize, selectedProductSize } from '../sideMenu/types/colorList';
+  import {
+    PRODUCT_COLORS,
+    selectedProductColorIndex,
+    setProductColors,
+    setSelectedProductColorIndex,
+    setSelectedProductSize,
+    selectedProductSize,
+    extractColorSizes,
+    normalizeSizeToken,
+    compareSizes,
+  } from '../sideMenu/types/colorList';
   import { supabase } from '../../supabase';
   import type { ClothingItemRow } from './clothesDb';
   import { findMeasurementForSize, normalizeSizeLabel } from '../../utils/sizeMeasurements';
@@ -101,7 +111,16 @@
 
   async function applyStoredDesign(definition: Record<string, any> | null, designState: SerializedDesignState | null) {
     if (definition) {
+      if (Array.isArray(definition.sizeMeasurements)) {
+        currentSizeMeasurements.value = definition.sizeMeasurements;
+        checkoutStore.setSizeMeasurements(definition.sizeMeasurements);
+      } else {
+        currentSizeMeasurements.value = [];
+        checkoutStore.setSizeMeasurements([]);
+      }
+
       if (Array.isArray(definition.colors)) {
+        mergeMeasurementSizesIntoColors(definition.colors, currentSizeMeasurements.value);
         setProductColors(definition.colors);
         let nextIndex = typeof definition.selectedColorIndex === 'number' ? definition.selectedColorIndex : -1;
         if (definition.selectedColorId) {
@@ -119,10 +138,7 @@
           checkoutStore.setColor(colorSummary);
         }
       }
-      if (Array.isArray(definition.sizeMeasurements)) {
-        currentSizeMeasurements.value = definition.sizeMeasurements;
-        checkoutStore.setSizeMeasurements(definition.sizeMeasurements);
-      }
+
       if (Object.prototype.hasOwnProperty.call(definition, 'size')) {
         const nextSize = typeof definition.size === 'string' ? definition.size : null;
         setSelectedProductSize(nextSize);
@@ -209,9 +225,44 @@
     return null;
   }
 
-  function normalizeSizeMeasurements(value: any): SizeMeasurementEntry[] {
-    const source = Array.isArray(value) ? value : asArray(value);
-    const normalized: SizeMeasurementEntry[] = [];
+function parseMeasurementValue(raw: unknown): number | null {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null;
+  }
+  if (typeof raw !== 'string') return null;
+  let cleaned = raw.trim();
+  if (!cleaned) return null;
+  cleaned = cleaned.replace(/["”]/g, '');
+  cleaned = cleaned.replace(/\b(?:inches?|inch|in)\.?$/i, '').trim();
+  cleaned = cleaned.replace(/-/g, ' ');
+  const decimalMatch = cleaned.match(/^([+-]?\d+(?:\.\d+)?)$/);
+  if (decimalMatch) {
+    return Number.parseFloat(decimalMatch[1]);
+  }
+  const mixedMatch = cleaned.match(/^([+-]?\d+)\s+(\d+)\/(\d+)$/);
+  if (mixedMatch) {
+    const whole = Number.parseInt(mixedMatch[1], 10);
+    const numerator = Number.parseInt(mixedMatch[2], 10);
+    const denominator = Number.parseInt(mixedMatch[3], 10);
+    if (denominator === 0) return null;
+    const fraction = numerator / denominator;
+    return whole >= 0 ? whole + fraction : whole - fraction;
+  }
+  const fractionMatch = cleaned.match(/^([+-]?)(\d+)\/(\d+)$/);
+  if (fractionMatch) {
+    const sign = fractionMatch[1] === '-' ? -1 : 1;
+    const numerator = Number.parseInt(fractionMatch[2], 10);
+    const denominator = Number.parseInt(fractionMatch[3], 10);
+    if (denominator === 0) return null;
+    return sign * (numerator / denominator);
+  }
+  const fallback = Number(cleaned.replace(/[^0-9.+-]/g, ''));
+  return Number.isFinite(fallback) ? fallback : null;
+}
+
+function normalizeSizeMeasurements(value: any): SizeMeasurementEntry[] {
+  const source = Array.isArray(value) ? value : asArray(value);
+  const normalized: SizeMeasurementEntry[] = [];
 
     for (const entry of source) {
       const rawLabel = typeof entry?.sizeLabel === 'string'
@@ -242,23 +293,19 @@
 
         const type = typeof spec?.type === 'string' && spec.type.trim() ? spec.type.trim() : rawKey || key;
         const unit = typeof spec?.unit === 'string' && spec.unit.trim() ? spec.unit.trim() : 'inches';
-        const value = Number(spec?.value ?? spec?.measurementValue);
-        if (!Number.isFinite(value)) continue;
-        const rawValueInInches = Number((spec as any)?.valueInInches ?? (spec as any)?.value_in_inches);
-        const valueInInches = Number.isFinite(rawValueInInches)
-          ? rawValueInInches
-          : convertMeasurementToInches(value, unit);
+      const rawValue = (spec as any)?.value ?? (spec as any)?.measurementValue ?? (spec as any)?.valueInInches ?? (spec as any)?.value_in_inches;
+      const parsedValue = parseMeasurementValue(rawValue);
+      if (!Number.isFinite(parsedValue)) continue;
+      const valueInInches = convertMeasurementToInches(parsedValue!, unit);
 
-        specs.push({
-          key,
-          type,
-          unit,
-          value,
-          valueInInches: valueInInches ?? null,
-        });
+      specs.push({
+        key,
+        type,
+        unit,
+        value: parsedValue!,
+        valueInInches: valueInInches ?? parsedValue! ?? null,
+      });
       }
-
-      if (!specs.length) continue;
 
       normalized.push({
         sizeLabel,
@@ -267,11 +314,11 @@
       });
     }
 
-    return normalized;
-  }
+  return normalized;
+}
 
-  function isSizeSupported(
-    size: string | null | undefined,
+function isSizeSupported(
+  size: string | null | undefined,
     measurementEntries: SizeMeasurementEntry[],
     colorSizes: string[],
   ): boolean {
@@ -279,9 +326,47 @@
     const trimmed = size.trim();
     if (!trimmed) return false;
     if (colorSizes.some((candidate) => candidate === trimmed)) return true;
-    const measurement = findMeasurementForSize(measurementEntries, trimmed);
-    return Boolean(measurement);
+  const measurement = findMeasurementForSize(measurementEntries, trimmed);
+  return Boolean(measurement);
+}
+
+function mergeMeasurementSizesIntoColors(colors: any[], measurementEntries: SizeMeasurementEntry[] | undefined | null) {
+  if (!Array.isArray(colors) || !colors.length) return colors;
+  const entries = Array.isArray(measurementEntries) ? measurementEntries : [];
+  const measurementLabels = new Map<string, string>();
+  for (const entry of entries) {
+    const label = typeof entry?.sizeLabel === 'string' ? entry.sizeLabel.trim() : '';
+    if (!label) continue;
+    const normalized = normalizeSizeToken(label);
+    const key = normalized || label.toUpperCase();
+    if (!measurementLabels.has(key)) {
+      measurementLabels.set(key, label);
+    }
   }
+  if (!measurementLabels.size) return colors;
+
+  for (const color of colors) {
+    const existingSizes = extractColorSizes(color);
+    const merged = new Map<string, string>();
+    const addSize = (label: string) => {
+      if (typeof label !== 'string') return;
+      const trimmed = label.trim();
+      if (!trimmed) return;
+      const normalized = normalizeSizeToken(trimmed);
+      const key = normalized || trimmed.toUpperCase();
+      if (!merged.has(key)) {
+        merged.set(key, trimmed);
+      }
+    };
+    existingSizes.forEach(addSize);
+    measurementLabels.forEach((label) => addSize(label));
+    const combined = Array.from(merged.values());
+    combined.sort(compareSizes);
+    color.sizes = combined;
+  }
+
+  return colors;
+}
 
   function extractCategoryId(entry: any): string {
     const candidate = entry?.id ?? entry?.code ?? entry?.slug ?? entry?.value ?? entry?.key ?? null;

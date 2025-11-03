@@ -60,7 +60,12 @@
   import { storeToRefs } from 'pinia';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
-  import type { AddCartItemPayload, CartItemDesignPreviews } from '../../stores/cart';
+  import type {
+    AddCartItemPayload,
+    CartItemDesignPreviews,
+    CartItemBlankPreviews,
+    CartItemCanvasPreviews,
+  } from '../../stores/cart';
   import { findMeasurementForSize } from '../../utils/sizeMeasurements';
   import { formatCurrency } from '../../utils/currency';
   import { calculatePricing } from '../../utils/pricing';
@@ -76,6 +81,8 @@
     sizeMeasurements,
     activeDesignPreview,
     designPreviews,
+    canvasPreviews,
+    blankDesignPreviews,
     editingCartItemId,
     isEditingCartItem,
   } = storeToRefs(checkoutStore);
@@ -115,10 +122,31 @@
 
   const colorName = computed(() => color.value?.name || 'Color not selected');
   const sizeLabel = computed(() => size.value || 'Size not selected');
-  function buildDesignPreviewPayload(): CartItemDesignPreviews {
+  interface BuildPreviewOptions {
+    includeFallback?: boolean;
+  }
+
+  function buildDesignPreviewPayload(options?: BuildPreviewOptions): CartItemDesignPreviews {
+    const includeFallback = options?.includeFallback ?? true;
     const previews = designPreviews.value;
     return {
-      Front: previews?.Front ?? previewImage.value ?? null,
+      Front: previews?.Front ?? (includeFallback ? previewImage.value ?? null : null),
+      Back: previews?.Back ?? null,
+    };
+  }
+
+  function buildBlankPreviewPayload(): CartItemBlankPreviews {
+    const previews = blankDesignPreviews.value;
+    return {
+      Front: previews?.Front ?? null,
+      Back: previews?.Back ?? null,
+    };
+  }
+
+  function buildCanvasPreviewPayload(): CartItemCanvasPreviews {
+    const previews = canvasPreviews.value;
+    return {
+      Front: previews?.Front ?? null,
       Back: previews?.Back ?? null,
     };
   }
@@ -127,16 +155,75 @@
 
   function pricingLogger(message: string, details?: Record<string, unknown>) {
     if (!ENABLE_PRICING_LOGS) return;
+    if (message === 'design:view-report' && details) {
+      const view = (details.view as string) ?? 'View';
+      const summary = details.summary as Record<string, any> | undefined;
+      const items = Array.isArray(details.items) ? details.items as Record<string, any>[] : [];
+      const summaryPayload = summary
+        ? {
+            bounds: summary.bounds
+              ? {
+                  widthInches: Number(summary.bounds.widthInches ?? 0).toFixed(2),
+                  heightInches: Number(summary.bounds.heightInches ?? 0).toFixed(2),
+                  areaSquareInches: Number(summary.bounds.areaSquareInches ?? 0).toFixed(2),
+                }
+              : undefined,
+            coverageRatio: typeof summary.coverageRatio === 'number'
+              ? `${(summary.coverageRatio * 100).toFixed(1)}%`
+              : null,
+            priceTier: summary.priceTier ?? null,
+            elementsCount: summary.elementsCount ?? items.length,
+            sumAABBInchesSq: typeof summary.sumAABBInchesSq === 'number'
+              ? Number(summary.sumAABBInchesSq).toFixed(2)
+              : null,
+            grid: summary.grid
+              ? {
+                  widthInches: summary.grid.widthInches != null ? Number(summary.grid.widthInches).toFixed(2) : null,
+                  heightInches: summary.grid.heightInches != null ? Number(summary.grid.heightInches).toFixed(2) : null,
+                  areaSquareInches: summary.grid.areaSquareInches != null
+                    ? Number(summary.grid.areaSquareInches).toFixed(2)
+                    : null,
+                }
+              : undefined,
+          }
+        : null;
+
+      const tableRows = items.map((item) => ({
+        index: item.index,
+        type: item.elementType ?? item.type ?? '',
+        variant: item.elementVariant ?? '',
+        name: item.name ?? '',
+        size: `${Number(item.widthInches ?? 0).toFixed(2)}×${Number(item.heightInches ?? 0).toFixed(2)}`,
+        areaSqIn: item.areaSquareInches != null ? Number(item.areaSquareInches).toFixed(2) : '',
+        position: item.position
+          ? `${Number(item.position.x ?? 0).toFixed(0)},${Number(item.position.y ?? 0).toFixed(0)}`
+          : '',
+        rotation: item.rotation ?? 0,
+      }));
+
+      console.groupCollapsed(`[Design Charge] ${view}`);
+      if (summaryPayload) {
+        console.log('Summary', summaryPayload);
+      }
+      if (tableRows.length) {
+        console.table(tableRows);
+      } else {
+        console.log('No elements detected.');
+      }
+      console.groupEnd();
+      return;
+    }
+
     if (details) {
       console.log(`[Pricing] ${message}`, details);
-    } else {
-      console.log(`[Pricing] ${message}`);
+      return;
     }
+    console.log(`[Pricing] ${message}`);
   }
 
   function evaluateCurrentPricing(log = false) {
     const designState = checkoutStore.captureDesignState();
-    const previews = buildDesignPreviewPayload();
+    const previews = buildDesignPreviewPayload({ includeFallback: false });
     return calculatePricing({
       basePrice: color.value?.price ?? null,
       designState: designState ?? null,
@@ -217,6 +304,8 @@
   function buildCartPayload(): AddCartItemPayload {
     const designState = checkoutStore.captureDesignState();
     const designPreviewPayload = buildDesignPreviewPayload();
+    const blankPreviewPayload = buildBlankPreviewPayload();
+    const canvasPreviewPayload = buildCanvasPreviewPayload();
 
     const breakdown = calculatePricing({
       basePrice: color.value?.price ?? null,
@@ -237,6 +326,8 @@
       currency: color.value?.currency ?? null,
       previewImage: previewImage.value,
       designPreviews: clonePayload(designPreviewPayload),
+      blankPreviews: clonePayload(blankPreviewPayload),
+      canvasPreviews: clonePayload(canvasPreviewPayload),
       measurement: measurementEntry.value,
       designState: clonePayload(designState ?? null),
       clothingDefinition: clonePayload(checkoutStore.clothingDefinition ?? null),

@@ -33,17 +33,23 @@ interface CheckoutRequestPayload {
   successUrl?: string | null;
   cancelUrl?: string | null;
   mode?: "checkout-session" | "payment-intent";
+  bypass?: boolean | null;
 }
 
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY");
-const DEFAULT_SUCCESS_URL = Deno.env.get("CHECKOUT_SUCCESS_URL") ?? "http://localhost:5173/?checkout=success";
-const DEFAULT_CANCEL_URL = Deno.env.get("CHECKOUT_CANCEL_URL") ?? "http://localhost:5173/?checkout=canceled";
+const DEFAULT_SUCCESS_URL = Deno.env.get("CHECKOUT_SUCCESS_URL") ??
+  "http://localhost:5173/?checkout=success";
+const DEFAULT_CANCEL_URL = Deno.env.get("CHECKOUT_CANCEL_URL") ??
+  "http://localhost:5173/?checkout=canceled";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type,Authorization",
 };
+
+const ALLOW_PAYMENT_BYPASS = (Deno.env.get("PAYMENTS_BYPASS") ?? "")
+  .toLowerCase() === "true";
 
 const stripe = STRIPE_SECRET_KEY
   ? new Stripe(STRIPE_SECRET_KEY, {
@@ -86,7 +92,9 @@ function isValidHttpUrl(value: string | null | undefined): value is string {
   }
 }
 
-function sanitizeMetadata(record: Record<string, unknown> | null | undefined): Stripe.Emptyable<Stripe.MetadataParam> {
+function sanitizeMetadata(
+  record: Record<string, unknown> | null | undefined,
+): Stripe.Emptyable<Stripe.MetadataParam> {
   if (!record || typeof record !== "object") return {};
   const metadata: Record<string, string> = {};
   for (const [key, rawValue] of Object.entries(record)) {
@@ -114,11 +122,6 @@ serve(async (req) => {
     return new Response("ok", { headers: CORS_HEADERS });
   }
 
-  if (!stripe) {
-    console.error("[Stripe] Missing STRIPE_SECRET_KEY environment variable.");
-    return jsonResponse({ error: "Stripe is not configured." }, 500);
-  }
-
   let payload: CheckoutRequestPayload;
   try {
     payload = await req.json();
@@ -127,7 +130,18 @@ serve(async (req) => {
     return jsonResponse({ error: "Invalid JSON payload." }, 400);
   }
 
-  const requestedItems = Array.isArray(payload.lineItems) ? payload.lineItems : [];
+  const bypassRequested = Boolean((payload as any)?.bypass === true);
+  const bypassPayment = ALLOW_PAYMENT_BYPASS &&
+    (bypassRequested || !stripe);
+
+  if (!stripe && !bypassPayment) {
+    console.error("[Stripe] Missing STRIPE_SECRET_KEY environment variable.");
+    return jsonResponse({ error: "Stripe is not configured." }, 500);
+  }
+
+  const requestedItems = Array.isArray(payload.lineItems)
+    ? payload.lineItems
+    : [];
 
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
 
@@ -147,7 +161,9 @@ serve(async (req) => {
 
     const name = sanitizeString(item.name, 120) ?? "Custom Apparel";
     const description = sanitizeString(item.description, 250);
-    const image = isValidHttpUrl(item.image ?? undefined) ? item.image ?? undefined : undefined;
+    const image = isValidHttpUrl(item.image ?? undefined)
+      ? item.image ?? undefined
+      : undefined;
     const currency = sanitizeCurrency(item.currency);
 
     const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = {
@@ -177,10 +193,23 @@ serve(async (req) => {
     return jsonResponse({ error: "No valid line items were provided." }, 400);
   }
 
-  const successUrl = isValidHttpUrl(typeof payload.successUrl === "string" ? payload.successUrl : undefined)
+  if (bypassPayment) {
+    console.info("[Stripe] Payment bypass enabled; returning bypass response.");
+    return jsonResponse({
+      bypassed: true,
+      clientSecret: null,
+      message: "Payment bypassed via configuration.",
+    });
+  }
+
+  const successUrl = isValidHttpUrl(
+      typeof payload.successUrl === "string" ? payload.successUrl : undefined,
+    )
     ? (payload.successUrl as string)
     : DEFAULT_SUCCESS_URL;
-  const cancelUrl = isValidHttpUrl(typeof payload.cancelUrl === "string" ? payload.cancelUrl : undefined)
+  const cancelUrl = isValidHttpUrl(
+      typeof payload.cancelUrl === "string" ? payload.cancelUrl : undefined,
+    )
     ? (payload.cancelUrl as string)
     : DEFAULT_CANCEL_URL;
 
@@ -199,31 +228,69 @@ serve(async (req) => {
     cartUniqueCount: payload.cartSummary?.uniqueCount ?? null,
   });
 
-  const mode = payload.mode === "payment-intent" ? "payment-intent" : "checkout-session";
+  const mode = payload.mode === "payment-intent"
+    ? "payment-intent"
+    : "checkout-session";
 
   if (mode === "payment-intent") {
     if (!lineItems.length) {
       return jsonResponse({ error: "No valid line items were provided." }, 400);
     }
 
-    const firstCurrency = lineItems[0].price_data?.currency ?? "usd";
-    const hasMixedCurrency = lineItems.some((item) => item.price_data?.currency !== firstCurrency);
+    const cartCurrency = typeof payload.cartSummary?.currency === "string"
+      ? sanitizeCurrency(payload.cartSummary.currency)
+      : null;
+    const firstCurrency = cartCurrency ?? lineItems[0].price_data?.currency ??
+      "usd";
+    const hasMixedCurrency = lineItems.some((item) =>
+      item.price_data?.currency !== firstCurrency
+    );
     if (hasMixedCurrency) {
-      return jsonResponse({ error: "All line items must use the same currency." }, 400);
+      return jsonResponse({
+        error: "All line items must use the same currency.",
+      }, 400);
     }
 
-    let amount = 0;
+    const subtotalFromSummaryRaw = payload.cartSummary?.subtotal;
+    const subtotalFromSummary =
+      subtotalFromSummaryRaw !== null && subtotalFromSummaryRaw !== undefined
+        ? Number(subtotalFromSummaryRaw)
+        : null;
+    const summaryAmount =
+      subtotalFromSummary !== null && Number.isFinite(subtotalFromSummary) &&
+        subtotalFromSummary > 0
+        ? Math.round(subtotalFromSummary * 100)
+        : null;
+
+    let fallbackAmount = 0;
     for (const item of lineItems) {
       const qty = Math.max(1, Math.floor(item.quantity ?? 1));
       const unitAmount = Math.floor(item.price_data?.unit_amount ?? 0);
-      if (!Number.isFinite(unitAmount) || unitAmount <= 0) {
-        continue;
-      }
-      amount += qty * unitAmount;
+      if (!Number.isFinite(unitAmount) || unitAmount <= 0) continue;
+      fallbackAmount += qty * unitAmount;
+    }
+    if (!Number.isFinite(fallbackAmount) || fallbackAmount <= 0) {
+      fallbackAmount = 0;
+    }
+
+    const amount = summaryAmount && summaryAmount > 0
+      ? summaryAmount
+      : fallbackAmount;
+    if (summaryAmount && fallbackAmount && summaryAmount !== fallbackAmount) {
+      console.warn(
+        "[Stripe] Cart summary subtotal does not match line item total.",
+        {
+          summaryAmount,
+          fallbackAmount,
+        },
+      );
     }
 
     if (!Number.isFinite(amount) || amount <= 0) {
-      return jsonResponse({ error: "Unable to determine payment amount." }, 400);
+      return jsonResponse(
+        { error: "Unable to determine payment amount." },
+        400,
+      );
     }
 
     try {
@@ -244,7 +311,9 @@ serve(async (req) => {
       });
     } catch (error) {
       console.error("[Stripe] Failed to create PaymentIntent", error);
-      return jsonResponse({ error: "Unable to start payment. Please try again." }, 500);
+      return jsonResponse({
+        error: "Unable to start payment. Please try again.",
+      }, 500);
     }
   }
 
@@ -267,7 +336,9 @@ serve(async (req) => {
     });
   } catch (error) {
     console.error("[Stripe] Session creation failed:", error);
-    const message = error instanceof Error ? error.message : "Stripe checkout session failed.";
+    const message = error instanceof Error
+      ? error.message
+      : "Stripe checkout session failed.";
     return jsonResponse({ error: message }, 500);
   }
 });

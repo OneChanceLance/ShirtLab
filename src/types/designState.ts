@@ -1,4 +1,4 @@
-import type { TextEffect } from '../components/shirtlab/types';
+import type { ElementType, ElementVariant, TextEffect } from '../components/shirtlab/types';
 
 export type DesignViewName = 'Front' | 'Back';
 
@@ -19,6 +19,9 @@ export interface SerializedImageObject {
   isVector?: boolean;
   name?: string;
   shapeMeta?: Record<string, any>;
+  elementType?: ElementType;
+  elementVariant?: ElementVariant;
+  view?: DesignViewName;
 }
 
 export interface SerializedTextObject {
@@ -39,6 +42,10 @@ export interface SerializedTextObject {
   h: number;
   showHandles?: boolean;
   effect: TextEffect;
+  name?: string;
+  elementType?: ElementType;
+  elementVariant?: ElementVariant;
+  view?: DesignViewName;
 }
 
 export interface SerializedDesignView {

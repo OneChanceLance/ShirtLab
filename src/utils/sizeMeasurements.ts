@@ -32,9 +32,43 @@ function normalizeSpecType(value: unknown): string {
   return clean.replace(/[^a-z0-9]+/g, '_');
 }
 
-function toNumber(value: unknown): number | null {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
+function parseMeasurementValue(raw: unknown): number | null {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null;
+  }
+  if (typeof raw !== 'string') return null;
+  let cleaned = raw.trim();
+  if (!cleaned) return null;
+  cleaned = cleaned.replace(/["”]/g, '');
+  cleaned = cleaned.replace(/\b(?:inches?|inch|in)\.?$/i, '').trim();
+  cleaned = cleaned.replace(/-/g, ' ');
+
+  const decimalMatch = cleaned.match(/^([+-]?\d+(?:\.\d+)?)$/);
+  if (decimalMatch) {
+    return Number.parseFloat(decimalMatch[1]);
+  }
+
+  const mixedMatch = cleaned.match(/^([+-]?\d+)\s+(\d+)\/(\d+)$/);
+  if (mixedMatch) {
+    const whole = Number.parseInt(mixedMatch[1], 10);
+    const numerator = Number.parseInt(mixedMatch[2], 10);
+    const denominator = Number.parseInt(mixedMatch[3], 10);
+    if (!Number.isFinite(denominator) || denominator === 0) return null;
+    const fraction = numerator / denominator;
+    return whole >= 0 ? whole + fraction : whole - fraction;
+  }
+
+  const fractionMatch = cleaned.match(/^([+-]?)(\d+)\/(\d+)$/);
+  if (fractionMatch) {
+    const sign = fractionMatch[1] === '-' ? -1 : 1;
+    const numerator = Number.parseInt(fractionMatch[2], 10);
+    const denominator = Number.parseInt(fractionMatch[3], 10);
+    if (!Number.isFinite(denominator) || denominator === 0) return null;
+    return sign * (numerator / denominator);
+  }
+
+  const fallback = Number(cleaned.replace(/[^0-9.+-]/g, ''));
+  return Number.isFinite(fallback) ? fallback : null;
 }
 
 function convertToInches(value: number, unit: string | null | undefined): number | null {
@@ -57,7 +91,7 @@ function extractSpecArray(rawSpecArray: any): SizeMeasurementSpec[] {
     const rawType = spec?.specificationType ?? spec?.SpecificationType ?? spec?.specificationName ?? spec?.name;
     const rawUnit = spec?.specificationUom ?? spec?.SpecificationUom ?? spec?.uom ?? spec?.unit ?? null;
     const rawValue = spec?.measurementValue ?? spec?.MeasurementValue ?? spec?.value;
-    const value = toNumber(rawValue);
+    const value = parseMeasurementValue(rawValue);
     if (value === null) continue;
 
     const key = normalizeSpecType(rawType);
@@ -121,16 +155,48 @@ export function findMeasurementForSize(
     || list[0];
 }
 
+function findSpecInternal(
+  entry: SizeMeasurementEntry | undefined,
+  keys: string[],
+): SizeMeasurementSpec | undefined {
+  if (!entry) return undefined;
+  const normalizedKeys = keys.map((key) => normalizeSpecType(key));
+  const specs = Array.isArray(entry.specs) ? entry.specs : [];
+
+  for (const spec of specs) {
+    if (normalizedKeys.includes(spec.key)) {
+      return spec;
+    }
+  }
+
+  for (const spec of specs) {
+    if (normalizedKeys.some((key) => spec.key.includes(key))) {
+      return spec;
+    }
+  }
+
+  for (const spec of specs) {
+    const combined = `${spec.type ?? ''} ${spec.key ?? ''}`.toLowerCase();
+    if (normalizedKeys.some((key) => combined.includes(key))) {
+      return spec;
+    }
+  }
+
+  return undefined;
+}
+
 export function findSpecValueInInches(
   entry: SizeMeasurementEntry | undefined,
   keys: string[],
 ): number | undefined {
-  if (!entry) return undefined;
-  const normalizedKeys = keys.map((key) => normalizeSpecType(key));
-  for (const spec of entry.specs) {
-    if (normalizedKeys.includes(spec.key)) {
-      return spec.valueInInches ?? spec.value;
-    }
-  }
-  return undefined;
+  const spec = findSpecInternal(entry, keys);
+  if (!spec) return undefined;
+  return spec.valueInInches ?? spec.value;
+}
+
+export function findSpecEntry(
+  entry: SizeMeasurementEntry | undefined,
+  keys: string[],
+): SizeMeasurementSpec | undefined {
+  return findSpecInternal(entry, keys);
 }

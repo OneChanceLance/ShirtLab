@@ -5,6 +5,64 @@
 
       <canvas ref="canvas" :width="canvasWidth" :height="canvasHeight" style="display:block;"
         :style="{ cursor: canvasCursor }" @mousedown="startDrag" @mousemove="onMove" @mouseup="stopDrag" />
+      <div
+        v-if="coverageOverlayStyle"
+        class="pricing-coverage-outline"
+        :style="coverageOverlayStyle"
+      />
+      <div class="design-inspector" :class="{ 'design-inspector--collapsed': !inspectorOpen }">
+        <button class="design-inspector__toggle" type="button" @click="toggleInspector">
+          {{ inspectorOpen ? 'Hide inspector' : 'Show inspector' }}
+        </button>
+        <div v-if="inspectorOpen" class="design-inspector__panel">
+          <header class="design-inspector__header">
+            <div>
+              <span class="design-inspector__title">{{ selectedView }} inventory</span>
+              <small class="design-inspector__subtitle">
+                {{ inspectorSummary.elementsCount }} item{{ inspectorSummary.elementsCount === 1 ? '' : 's' }}
+              </small>
+            </div>
+          </header>
+          <div class="design-inspector__metrics">
+            <div class="design-inspector__metric">
+              <span class="design-inspector__metric-label">Grid</span>
+              <strong>
+                {{ formatInches(inspectorSummary.grid.widthInches) }} ×
+                {{ formatInches(inspectorSummary.grid.heightInches) }}
+              </strong>
+            </div>
+            <div class="design-inspector__metric">
+              <span class="design-inspector__metric-label">Bounds</span>
+              <strong v-if="inspectorSummary.bounds.widthInches !== null">
+                {{ formatInches(inspectorSummary.bounds.widthInches) }} ×
+                {{ formatInches(inspectorSummary.bounds.heightInches) }}
+              </strong>
+              <strong v-else>—</strong>
+            </div>
+            <div class="design-inspector__metric">
+              <span class="design-inspector__metric-label">Coverage</span>
+              <strong>{{ formatPercent(inspectorSummary.coverageRatio) }}</strong>
+            </div>
+            <div class="design-inspector__metric">
+              <span class="design-inspector__metric-label">Total area</span>
+              <strong>{{ formatArea(inspectorSummary.sumAreaSquareInches) }}</strong>
+            </div>
+          </div>
+          <ul class="design-inspector__list">
+            <li v-for="item in inspectorItems" :key="item.id" :class="{ 'is-active': item.id === selectedInspectorId }"
+              class="design-inspector__row" @click="handleInspectorSelect(item.id)">
+              <div class="design-inspector__item-info">
+                <span class="design-inspector__item-title">{{ inspectorItemLabel(item) }}</span>
+                <small class="design-inspector__item-meta">{{ inspectorItemMeta(item) }}</small>
+              </div>
+              <span class="design-inspector__item-position">
+                {{ Math.round(item.position.x) }},{{ Math.round(item.position.y) }}
+              </span>
+            </li>
+            <li v-if="!inspectorItems.length" class="design-inspector__empty">No elements placed.</li>
+          </ul>
+        </div>
+      </div>
       <!-- Vue icon handles for selected image -->
       <div v-if="selectedObject && selectedObject.type === 'image'">
         <div class="canvas" v-for="(handle, index) in ['delete', 'resize', 'duplicate', 'rotate']" :key="handle" :style="{
@@ -68,7 +126,7 @@
   import ArrowLeftRight from 'vue-material-design-icons/ArrowLeftRight.vue'
   import RotateIcon from 'vue-material-design-icons/RotateRight.vue'
   import ViewPort from '../../components/shirtlab/Viewports/ViewPort.vue';
-  import type { TextObject, ImageObject } from './types'
+  import type { TextObject, ImageObject, ElementType, ElementVariant } from './types'
   // ADD with the other imports
   import { withDefaults, getEffectTransform, getEffectAdvance, applyToContext } from '../sideMenu/types/effectsList';
   import { getAABB, getAABBCorners, getRotatedCorners, pointInRotatedRect } from './utils/geometry';
@@ -149,6 +207,86 @@
       offset: { x: 0, y: 0 },
     },
   });
+
+  const coverageBounds = ref<{ x: number; y: number; w: number; h: number } | null>(null);
+  const coverageOverlayStyle = computed(() => {
+    const bounds = coverageBounds.value;
+    if (!bounds || bounds.w <= 0 || bounds.h <= 0) return null;
+    return {
+      left: `${Math.round(bounds.x)}px`,
+      top: `${Math.round(bounds.y)}px`,
+      width: `${Math.round(bounds.w)}px`,
+      height: `${Math.round(bounds.h)}px`,
+    };
+  });
+  const DEFAULT_PIXELS_PER_INCH = 40;
+
+  interface InspectorItem {
+    id: string;
+    type: 'image' | 'text';
+    elementType: ElementType;
+    elementVariant?: ElementVariant | null;
+    name: string;
+    widthInches: number | null;
+    heightInches: number | null;
+    areaSquareInches: number | null;
+    position: { x: number; y: number };
+    rotation: number;
+    z: number;
+    view: View;
+  }
+
+  interface InspectorSummary {
+    view: View;
+    elementsCount: number;
+    sumAreaSquareInches: number | null;
+    coverageRatio: number | null;
+    bounds: {
+      widthInches: number | null;
+      heightInches: number | null;
+      areaSquareInches: number | null;
+    };
+    grid: {
+      widthInches: number | null;
+      heightInches: number | null;
+      areaSquareInches: number | null;
+    };
+  }
+
+  type InspectorSnapshot = {
+    items: InspectorItem[];
+    summary: InspectorSummary;
+  };
+
+  function createEmptySummary(view: View): InspectorSummary {
+    return {
+      view,
+      elementsCount: 0,
+      sumAreaSquareInches: null,
+      coverageRatio: null,
+      bounds: {
+        widthInches: null,
+        heightInches: null,
+        areaSquareInches: null,
+      },
+      grid: {
+        widthInches: null,
+        heightInches: null,
+        areaSquareInches: null,
+      },
+    };
+  }
+
+  const inspectorState = reactive<Record<View, InspectorSnapshot>>({
+    Front: { items: [], summary: createEmptySummary('Front') },
+    Back: { items: [], summary: createEmptySummary('Back') },
+  });
+  const inspectorOpen = ref(true);
+
+  const activeInspector = computed(() => inspectorState[selectedView.value]);
+  const inspectorItems = computed(() => activeInspector.value?.items ?? []);
+  const inspectorSummary = computed(() => activeInspector.value?.summary ?? createEmptySummary(selectedView.value));
+  const selectedInspectorId = computed(() => selectedObject.value?.id ?? null);
 
 
   // at top-level (script setup)
@@ -507,6 +645,14 @@
     auto: null,
     autoGenerated: null,
   };
+  const viewGridState = reactive<Record<View, DesignGrid>>({
+    Front: { ...DEFAULT_GRID },
+    Back: { ...DEFAULT_GRID },
+  });
+  const viewGridInitialized = reactive<Record<View, boolean>>({
+    Front: true,
+    Back: false,
+  });
 
   // -----------------------------------------------------
   // Grid Configuration & Measurement Helpers
@@ -524,6 +670,117 @@
     resetClothingDetails,
   } = createGridState(DEFAULT_GRID);
 
+  function resolveEffectiveDpi(grid: DesignGrid): number | null {
+    const candidateValues = [
+      (grid as any).dpi,
+      (grid as any).pxPerInch,
+      (grid as any).pixelsPerInch,
+    ];
+    for (const raw of candidateValues) {
+      const value = Number(raw);
+      if (Number.isFinite(value) && value > 0) {
+        return value;
+      }
+    }
+
+    const widthInches = Number(grid.widthInches);
+    if (Number.isFinite(widthInches) && widthInches > 0 && grid.w > 0) {
+      return grid.w / widthInches;
+    }
+
+    const heightInches = Number(grid.heightInches);
+    if (Number.isFinite(heightInches) && heightInches > 0 && grid.h > 0) {
+      return grid.h / heightInches;
+    }
+
+    const derived = getPixelsPerInch();
+    return Number.isFinite(derived) && derived > 0 ? derived : null;
+  }
+
+  function numericOrNull(value: unknown): number | null {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function numbersAreClose(a: unknown, b: unknown, tolerance: number): boolean {
+    const aVal = numericOrNull(a);
+    const bVal = numericOrNull(b);
+    if (aVal === null && bVal === null) return true;
+    if (aVal === null || bVal === null) return false;
+    return Math.abs(aVal - bVal) <= tolerance;
+  }
+
+  function gridsAreEquivalent(
+    current: Record<string, any> | null | undefined,
+    next: Record<string, any>,
+  ): boolean {
+    if (!current) return false;
+    const numericComparisons: Array<{ key: string; tolerance: number }> = [
+      { key: 'x', tolerance: 0.25 },
+      { key: 'y', tolerance: 0.25 },
+      { key: 'w', tolerance: 0.25 },
+      { key: 'h', tolerance: 0.25 },
+      { key: 'widthInches', tolerance: 0.02 },
+      { key: 'heightInches', tolerance: 0.02 },
+      { key: 'dpi', tolerance: 0.02 },
+      { key: 'pxPerInch', tolerance: 0.02 },
+      { key: 'pixelsPerInch', tolerance: 0.02 },
+    ];
+    for (const { key, tolerance } of numericComparisons) {
+      if (!numbersAreClose((current as any)[key], (next as any)[key], tolerance)) {
+        return false;
+      }
+    }
+    const nullableKeys: Array<'auto' | 'autoGenerated'> = ['auto', 'autoGenerated'];
+    for (const key of nullableKeys) {
+      const currentValue = (current as any)[key];
+      const nextValue = (next as any)[key];
+      if ((currentValue ?? null) !== (nextValue ?? null)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function syncGridToCheckoutStore(grid: DesignGrid) {
+    const effectiveDpi = resolveEffectiveDpi(grid);
+    const definition = checkoutStore.clothingDefinition ?? null;
+    const currentGrid = definition && typeof definition.grid === 'object'
+      ? (definition.grid as Record<string, any>)
+      : null;
+
+    const nextGrid: Record<string, any> = currentGrid ? { ...currentGrid } : {};
+    nextGrid.x = grid.x;
+    nextGrid.y = grid.y;
+    nextGrid.w = grid.w;
+    nextGrid.h = grid.h;
+    nextGrid.auto = grid.auto ?? null;
+    nextGrid.autoGenerated = grid.autoGenerated ?? null;
+
+    const widthInches = Number(grid.widthInches);
+    nextGrid.widthInches = Number.isFinite(widthInches) && widthInches > 0 ? widthInches : null;
+
+    const heightInches = Number(grid.heightInches);
+    nextGrid.heightInches = Number.isFinite(heightInches) && heightInches > 0 ? heightInches : null;
+
+    if (typeof effectiveDpi === 'number' && Number.isFinite(effectiveDpi) && effectiveDpi > 0) {
+      const rounded = Number(effectiveDpi.toFixed(2));
+      nextGrid.dpi = rounded;
+      nextGrid.pxPerInch = rounded;
+      nextGrid.pixelsPerInch = rounded;
+    }
+
+    if (gridsAreEquivalent(currentGrid, nextGrid)) {
+      return;
+    }
+
+    const nextDefinition = {
+      ...(definition ?? {}),
+      grid: nextGrid,
+    };
+    checkoutStore.setClothingDefinition(nextDefinition);
+  }
+
   function toggleGrid() {
     showGrid.value = !showGrid.value;
   }
@@ -539,12 +796,21 @@
     const { skipStore = false } = options;
     // Allow switching even if already on the side, always store state and update preview
     const previous = selectedView.value;
+    const previousGrid = resolveGrid();
+    viewGridState[previous] = { ...previousGrid };
+    viewGridInitialized[previous] = true;
+    if (!viewGridInitialized[next]) {
+      viewGridState[next] = { ...previousGrid };
+      viewGridInitialized[next] = true;
+    }
     if (!skipStore) {
       storeViewState(previous);
       updatePreviewFor(previous, { skipBackground: !shirtBgLoaded.value });
     }
 
     selectedView.value = next;
+    const savedGrid = viewGridState[next] ?? DEFAULT_GRID;
+    clothingDetails.value.grid = { ...DEFAULT_GRID, ...savedGrid };
     setShirtBackground(viewToSrc[next] || viewToSrc.Front || '', { mirror: viewMirrored[next] });
     loadViewState(next);
     requestAutoGrid(false);
@@ -764,6 +1030,10 @@
 
   const frontPreview = ref<string>('');
   const backPreview = ref<string>('');
+  const frontBlankPreview = ref<string>('');
+  const backBlankPreview = ref<string>('');
+  const frontCanvasPreview = ref<string>('');
+  const backCanvasPreview = ref<string>('');
 
   function hasDesignForView(view: View): boolean {
     if (view === selectedView.value) {
@@ -777,11 +1047,53 @@
   }
 
   watch(frontPreview, (url) => {
-    checkoutStore.setDesignPreview('Front', hasDesignForView('Front') ? (url || null) : null);
+    const hasDesign = hasDesignForView('Front');
+    checkoutStore.setDesignPreview('Front', hasDesign ? (url || null) : null);
+    if (!hasDesign) {
+      checkoutStore.setBlankDesignPreview('Front', null);
+      checkoutStore.setCanvasPreview('Front', null);
+    }
   }, { immediate: true });
 
   watch(backPreview, (url) => {
-    checkoutStore.setDesignPreview('Back', hasDesignForView('Back') ? (url || null) : null);
+    const hasDesign = hasDesignForView('Back');
+    checkoutStore.setDesignPreview('Back', hasDesign ? (url || null) : null);
+    if (!hasDesign) {
+      checkoutStore.setBlankDesignPreview('Back', null);
+      checkoutStore.setCanvasPreview('Back', null);
+    }
+  }, { immediate: true });
+
+  watch(frontBlankPreview, (url) => {
+    if (!hasDesignForView('Front')) {
+      checkoutStore.setBlankDesignPreview('Front', null);
+      return;
+    }
+    checkoutStore.setBlankDesignPreview('Front', url || null);
+  }, { immediate: true });
+
+  watch(backBlankPreview, (url) => {
+    if (!hasDesignForView('Back')) {
+      checkoutStore.setBlankDesignPreview('Back', null);
+      return;
+    }
+    checkoutStore.setBlankDesignPreview('Back', url || null);
+  }, { immediate: true });
+
+  watch(frontCanvasPreview, (url) => {
+    if (!hasDesignForView('Front')) {
+      checkoutStore.setCanvasPreview('Front', null);
+      return;
+    }
+    checkoutStore.setCanvasPreview('Front', url || null);
+  }, { immediate: true });
+
+  watch(backCanvasPreview, (url) => {
+    if (!hasDesignForView('Back')) {
+      checkoutStore.setCanvasPreview('Back', null);
+      return;
+    }
+    checkoutStore.setCanvasPreview('Back', url || null);
   }, { immediate: true });
 
   watch(selectedView, (view) => {
@@ -800,35 +1112,137 @@
   function refreshAllPreviews() {
     for (const view of ALL_VIEWS) {
       const src = viewToSrc[view] || fallbackPreview;
-      setPreview(view, src);
+      setPreview(view, { designUrl: src, blankUrl: '', canvasUrl: src });
     }
     syncDesignState();
   }
 
-  function setPreview(view: View, url: string) {
+  type PreviewPayload = {
+    designUrl: string;
+    blankUrl?: string | null;
+    canvasUrl?: string | null;
+  };
+
+  function setPreview(view: View, payload: PreviewPayload) {
+    const { designUrl, blankUrl = null, canvasUrl = null } = payload;
     if (view === 'Front') {
-      frontPreview.value = url;
+      frontPreview.value = designUrl;
+      frontBlankPreview.value = blankUrl ?? '';
+      frontCanvasPreview.value = canvasUrl ?? '';
     } else if (view === 'Back') {
-      backPreview.value = url;
+      backPreview.value = designUrl;
+      backBlankPreview.value = blankUrl ?? '';
+      backCanvasPreview.value = canvasUrl ?? '';
     }
   }
 
-  function cloneImageObject(item: ImageObject): ImageObject {
+  function inferImageElementType(source: any): ElementType {
+    if (typeof source?.elementType === 'string') return source.elementType as ElementType;
+    if (source?.shapeMeta) return 'shape';
+    if (typeof source?.name === 'string' && source.name.startsWith('shape:')) return 'shape';
+    if (typeof source?.name === 'string' && source.name.includes(':')) return 'icon';
+    return 'image';
+  }
+
+  function inferImageVariant(source: any, elementType: ElementType): ElementVariant | undefined {
+    if (typeof source?.elementVariant === 'string' && source.elementVariant.length) {
+      return source.elementVariant;
+    }
+    if (elementType === 'shape') {
+      if (typeof source?.shapeMeta?.key === 'string') return source.shapeMeta.key;
+      if (typeof source?.name === 'string' && source.name.startsWith('shape:')) {
+        return source.name.split(':')[1] || 'shape';
+      }
+      return 'shape';
+    }
+    if (elementType === 'icon') {
+      if (typeof source?.name === 'string') {
+        const [, variant] = source.name.split(':');
+        if (variant) return variant;
+      }
+      return source?.isVector ? 'svg' : 'icon';
+    }
+    return source?.isVector ? 'svg' : 'bitmap';
+  }
+
+  function inferImageName(source: any, elementType: ElementType, variant?: ElementVariant | null): string {
+    const provided = typeof source?.name === 'string' ? source.name : undefined;
+    return buildImageDisplayName(elementType, variant, provided);
+  }
+
+  function normalizeImageObject(source: SerializedImageObject | ImageObject, view: View): ImageObject {
+    const elementType = inferImageElementType(source);
+    const elementVariant = inferImageVariant(source, elementType);
+    const name = inferImageName(source, elementType, elementVariant);
     return {
-      ...item,
-      // do not store live element
-      imgUrl: item.imgUrl // keep only the source
+      ...(source as ImageObject),
+      img: undefined,
+      showHandles: (source as ImageObject).showHandles ?? true,
+      isSelected: false,
+      shapeMeta: source.shapeMeta ? { ...source.shapeMeta } : undefined,
+      elementType,
+      elementVariant,
+      name,
+      view: (source as ImageObject).view ?? view,
     };
   }
 
-  function cloneTextObject(item: TextObject): TextObject {
+  function inferTextVariant(source: SerializedTextObject | TextObject): ElementVariant | undefined {
+    if (typeof (source as TextObject).elementVariant === 'string' && (source as TextObject).elementVariant!.length) {
+      return (source as TextObject).elementVariant;
+    }
+    if (typeof source.font === 'string') return source.font;
+    return undefined;
+  }
+
+  function inferTextName(source: SerializedTextObject | TextObject): string {
+    if (typeof (source as TextObject).name === 'string' && (source as TextObject).name!.trim().length) {
+      return (source as TextObject).name as string;
+    }
+    const text = (source as TextObject).content ?? '';
+    return text ? text.slice(0, 24) : 'Text';
+  }
+
+  function normalizeTextObject(source: SerializedTextObject | TextObject, view: View): TextObject {
+    const elementVariant = inferTextVariant(source);
     return {
-      ...item,
+      ...(source as TextObject),
+      showHandles: (source as TextObject).showHandles ?? true,
+      isSelected: false,
       effect: {
-        ...item.effect,
-        options: { ...item.effect.options },
+        name: source.effect?.name ?? 'none',
+        options: withDefaults(source.effect?.name ?? 'none', source.effect?.options),
       },
+      elementType: (source as TextObject).elementType ?? 'text',
+      elementVariant: elementVariant ?? undefined,
+      name: inferTextName(source),
+      view: (source as TextObject).view ?? view,
     };
+  }
+
+  function cloneImageObject(item: ImageObject, viewOverride?: View): ImageObject {
+    return normalizeImageObject(
+      {
+        ...item,
+        imgUrl: item.imgUrl,
+        view: viewOverride ?? item.view,
+      },
+      viewOverride ?? item.view ?? selectedView.value,
+    );
+  }
+
+  function cloneTextObject(item: TextObject, viewOverride?: View): TextObject {
+    return normalizeTextObject(
+      {
+        ...item,
+        effect: {
+          ...item.effect,
+          options: { ...item.effect.options },
+        },
+        view: viewOverride ?? item.view,
+      },
+      viewOverride ?? item.view ?? selectedView.value,
+    );
   }
 
   function serializeImageObject(item: ImageObject): SerializedImageObject {
@@ -856,24 +1270,12 @@
     };
   }
 
-  function deserializeImageObject(source: SerializedImageObject): ImageObject {
-    return {
-      ...source,
-      showHandles: source.showHandles ?? true,
-      isSelected: false,
-    } as ImageObject;
+  function deserializeImageObject(source: SerializedImageObject, view: View): ImageObject {
+    return normalizeImageObject(source, view);
   }
 
-  function deserializeTextObject(source: SerializedTextObject): TextObject {
-    return {
-      ...source,
-      showHandles: source.showHandles ?? true,
-      isSelected: false,
-      effect: {
-        name: source.effect?.name ?? 'none',
-        options: withDefaults(source.effect?.name ?? 'none', source.effect?.options),
-      },
-    } as TextObject;
+  function deserializeTextObject(source: SerializedTextObject, view: View): TextObject {
+    return normalizeTextObject(source, view);
   }
 
   function exportDesignState(): SerializedDesignState {
@@ -902,12 +1304,12 @@
 
     const nextViews = state.views ?? { Front: { images: [], texts: [] }, Back: { images: [], texts: [] } };
     viewStates.Front = {
-      images: (nextViews.Front?.images ?? []).map(deserializeImageObject),
-      texts: (nextViews.Front?.texts ?? []).map(deserializeTextObject),
+      images: (nextViews.Front?.images ?? []).map((img) => deserializeImageObject(img, 'Front')),
+      texts: (nextViews.Front?.texts ?? []).map((txt) => deserializeTextObject(txt, 'Front')),
     };
     viewStates.Back = {
-      images: (nextViews.Back?.images ?? []).map(deserializeImageObject),
-      texts: (nextViews.Back?.texts ?? []).map(deserializeTextObject),
+      images: (nextViews.Back?.images ?? []).map((img) => deserializeImageObject(img, 'Back')),
+      texts: (nextViews.Back?.texts ?? []).map((txt) => deserializeTextObject(txt, 'Back')),
     };
 
     const targetView = (state.activeView === 'Back' ? 'Back' : 'Front') as View;
@@ -935,14 +1337,14 @@
 
   function storeViewState(view: View) {
     const state = viewStates[view];
-    state.images = images.map(cloneImageObject);
-    state.texts = texts.map(cloneTextObject);
+    state.images = images.map((img) => cloneImageObject(img, view));
+    state.texts = texts.map((txt) => cloneTextObject(txt, view));
   }
 
   function loadViewState(view: View) {
     const state = viewStates[view] ?? { images: [], texts: [] };
-    images.splice(0, images.length, ...state.images.map(cloneImageObject));
-    texts.splice(0, texts.length, ...state.texts.map(cloneTextObject));
+    images.splice(0, images.length, ...state.images.map((img) => cloneImageObject(img, view)));
+    texts.splice(0, texts.length, ...state.texts.map((txt) => cloneTextObject(txt, view)));
     selectedObject.value = null;
     images.forEach((img) => (img.isSelected = false));
     texts.forEach((txt) => (txt.isSelected = false));
@@ -969,7 +1371,12 @@
     storeViewState(view);
     if (skipBackground) return;
     // Build a full-canvas preview (background + objects only; no grid or rulers)
-    const buildFull = (ctx: CanvasRenderingContext2D, includeBackground: boolean) => {
+    const buildFull = (
+      ctx: CanvasRenderingContext2D,
+      includeBackground: boolean,
+      options: { fillColor?: string | null } = {},
+    ) => {
+      const { fillColor = '#ffffff' } = options;
       // 1) Background (shirt), optional to avoid CORS taint
       if (includeBackground && !skipBackground) {
         try {
@@ -977,9 +1384,8 @@
         } catch (e) {
           console.warn('[updatePreviewFor] drawShirtBg failed in preview:', e);
         }
-      } else {
-        // fill with white so previews look clean without bg
-        ctx.fillStyle = '#ffffff';
+      } else if (typeof fillColor === 'string') {
+        ctx.fillStyle = fillColor;
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
       }
 
@@ -1084,6 +1490,20 @@
       return croppedCanvas;
     }
 
+    function createBlankDataUrl(width: number, height: number): string {
+      const safeWidth = Math.max(1, Math.floor(width));
+      const safeHeight = Math.max(1, Math.floor(height));
+      const blankCanvas = document.createElement('canvas');
+      blankCanvas.width = safeWidth;
+      blankCanvas.height = safeHeight;
+      const blankCtx = blankCanvas.getContext('2d');
+      if (blankCtx) {
+        blankCtx.fillStyle = '#ffffff';
+        blankCtx.fillRect(0, 0, safeWidth, safeHeight);
+      }
+      return blankCanvas.toDataURL('image/png');
+    }
+
     try {
       // Always build an offscreen preview (never clone live canvas directly)
       const previewCanvas = document.createElement('canvas');
@@ -1092,12 +1512,24 @@
       const ctx = previewCanvas.getContext('2d');
       if (!ctx) return;
 
-      // Attempt with background included
-      buildFull(ctx, true);
+      let canvasUrl: string | null = null;
+      try {
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        buildFull(ctx, false, { fillColor: null });
+        canvasUrl = previewCanvas.toDataURL('image/png');
+      } catch (printErr) {
+        console.warn('[updatePreviewFor] Failed to capture full canvas preview; continuing without print canvas.', printErr);
+        canvasUrl = null;
+      }
+
+      // Attempt with background included for display thumbnails
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+      buildFull(ctx, true, { fillColor: '#ffffff' });
       try {
         const cropped = cropCanvasToContent(previewCanvas);
-        const url = cropped.toDataURL('image/png');
-        setPreview(view, url);
+        const designUrl = cropped.toDataURL('image/png');
+        const blankUrl = createBlankDataUrl(cropped.width, cropped.height);
+        setPreview(view, { designUrl, blankUrl, canvasUrl: canvasUrl ?? designUrl });
         syncDesignState();
         return;
       } catch (bgErr) {
@@ -1106,10 +1538,11 @@
 
       // Fallback: rebuild without background to avoid taint
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-      buildFull(ctx, false);
+      buildFull(ctx, false, { fillColor: '#ffffff' });
       const cropped = cropCanvasToContent(previewCanvas);
-      const url = cropped.toDataURL('image/png');
-      setPreview(view, url);
+      const designUrl = cropped.toDataURL('image/png');
+      const blankUrl = createBlankDataUrl(cropped.width, cropped.height);
+      setPreview(view, { designUrl, blankUrl, canvasUrl: canvasUrl ?? designUrl });
       syncDesignState();
     } catch (err) {
       console.warn('[updatePreviewFor] failed to build full-canvas preview:', err);
@@ -1364,12 +1797,58 @@
    */
   function draw() {
     const ctx = canvas.value?.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) {
+      if (coverageBounds.value !== null) {
+        coverageBounds.value = null;
+      }
+      return;
+    }
+
+    const coverageTracker = {
+      minX: Number.POSITIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+    };
+
+    const captureCoverage = (bounds: { minX: number; minY: number; maxX: number; maxY: number }) => {
+      if (
+        !Number.isFinite(bounds.minX) ||
+        !Number.isFinite(bounds.minY) ||
+        !Number.isFinite(bounds.maxX) ||
+        !Number.isFinite(bounds.maxY)
+      ) {
+        return;
+      }
+      coverageTracker.minX = Math.min(coverageTracker.minX, bounds.minX);
+      coverageTracker.minY = Math.min(coverageTracker.minY, bounds.minY);
+      coverageTracker.maxX = Math.max(coverageTracker.maxX, bounds.maxX);
+      coverageTracker.maxY = Math.max(coverageTracker.maxY, bounds.maxY);
+    };
+
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     drawShirtBg(ctx);
 
+    const gridRect = resolveGrid();
+    const gridWidthPx = gridRect.w;
+    const gridHeightPx = gridRect.h;
+    const gridDetails = clothingDetails.value.grid ?? {};
+    const rawGridWidthInches = toNumeric((gridDetails as any).widthInches ?? (gridDetails as any).physicalWidth ?? (gridDetails as any).widthIn ?? (gridDetails as any).width_in);
+    const rawGridHeightInches = toNumeric((gridDetails as any).heightInches ?? (gridDetails as any).physicalHeight ?? (gridDetails as any).heightIn ?? (gridDetails as any).height_in);
+    const gridPpi = getPixelsPerInch();
+    const effectivePpi = Number.isFinite(gridPpi) && gridPpi > 0 ? gridPpi : DEFAULT_PIXELS_PER_INCH;
+    const gridWidthInches = rawGridWidthInches ?? (gridWidthPx > 0 ? gridWidthPx / effectivePpi : null);
+    const gridHeightInches = rawGridHeightInches ?? (gridHeightPx > 0 ? gridHeightPx / effectivePpi : null);
+    const gridAreaInches = gridWidthInches && gridHeightInches ? gridWidthInches * gridHeightInches : null;
+
+    const convertPixelsToInches = (px: number): number => px / effectivePpi;
+    const convertWidthPx = (px: number): number => convertPixelsToInches(px);
+    const convertHeightPx = (px: number): number => convertPixelsToInches(px);
+
+    const inspectorItems: InspectorItem[] = [];
+    let inspectorAreaSum = 0;
+
     if (showGrid.value) {
-      const gridRect = resolveGrid();
       // Draw grid
       ctx.save();
       ctx.strokeStyle = "#bbb";
@@ -1427,6 +1906,38 @@
         ctx.drawImage(item.img, -item.w / 2, -item.h / 2, item.w, item.h);
         ctx.restore();
 
+        const imageBounds = getAABB({
+          x: item.x,
+          y: item.y,
+          w: item.w,
+          h: item.h,
+          rotation: item.rotation ?? 0,
+        });
+        captureCoverage(imageBounds);
+
+        const widthInches = convertWidthPx(item.w);
+        const heightInches = convertHeightPx(item.h);
+        const areaSquareInches = Number.isFinite(widthInches) && Number.isFinite(heightInches)
+          ? widthInches * heightInches
+          : null;
+        if (typeof areaSquareInches === 'number' && Number.isFinite(areaSquareInches)) {
+          inspectorAreaSum += areaSquareInches;
+        }
+        inspectorItems.push({
+          id: item.id,
+          type: 'image',
+          elementType: item.elementType ?? 'image',
+          elementVariant: item.elementVariant ?? null,
+          name: typeof item.name === 'string' && item.name.trim().length ? item.name : 'Graphic',
+          widthInches: Number.isFinite(widthInches) ? widthInches : null,
+          heightInches: Number.isFinite(heightInches) ? heightInches : null,
+          areaSquareInches: typeof areaSquareInches === 'number' && Number.isFinite(areaSquareInches) ? areaSquareInches : null,
+          position: { x: item.x, y: item.y },
+          rotation: item.rotation ?? 0,
+          z: Number(item.z ?? 0),
+          view: selectedView.value,
+        });
+
         if (item.isSelected) {
           const { TL, TR, BR, BL } = getRotatedCorners(item);
           ctx.save();
@@ -1448,6 +1959,37 @@
         // layout
         const block = layoutTextBlock(ctx, t);
 
+        const textBounds = getAABB({
+          x: block.boundsLeft,
+          y: block.boundsTop,
+          w: block.width,
+          h: block.height,
+          rotation: t.rotation ?? 0,
+        });
+        captureCoverage(textBounds);
+
+        const textWidthInches = convertWidthPx(block.width);
+        const textHeightInches = convertHeightPx(block.height);
+        const textAreaInches = Number.isFinite(textWidthInches) && Number.isFinite(textHeightInches)
+          ? textWidthInches * textHeightInches
+          : null;
+        if (typeof textAreaInches === 'number' && Number.isFinite(textAreaInches)) {
+          inspectorAreaSum += textAreaInches;
+        }
+        inspectorItems.push({
+          id: t.id,
+          type: 'text',
+          elementType: t.elementType ?? 'text',
+          elementVariant: t.elementVariant ?? t.font ?? null,
+          name: typeof t.name === 'string' && t.name.trim().length ? t.name : (String(t.content ?? '') || 'Text'),
+          widthInches: Number.isFinite(textWidthInches) ? textWidthInches : null,
+          heightInches: Number.isFinite(textHeightInches) ? textHeightInches : null,
+          areaSquareInches: typeof textAreaInches === 'number' && Number.isFinite(textAreaInches) ? textAreaInches : null,
+          position: { x: t.x, y: t.y },
+          rotation: t.rotation ?? 0,
+          z: Number(t.z ?? 0),
+          view: selectedView.value,
+        });
 
         // styles
         const eff = t.effect && t.effect.name ? t.effect : { name: 'none', options: withDefaults('none') };
@@ -1530,6 +2072,75 @@
         }
       }
     }
+
+    const hasCoverage =
+      Number.isFinite(coverageTracker.minX) &&
+      Number.isFinite(coverageTracker.minY) &&
+      Number.isFinite(coverageTracker.maxX) &&
+      Number.isFinite(coverageTracker.maxY) &&
+      coverageTracker.maxX > coverageTracker.minX &&
+      coverageTracker.maxY > coverageTracker.minY;
+
+    let boundingWidthInches: number | null = null;
+    let boundingHeightInches: number | null = null;
+    let boundingAreaInches: number | null = null;
+    let coverageRatio: number | null = null;
+
+    if (hasCoverage) {
+      const boundingWidthPx = Math.max(0, coverageTracker.maxX - coverageTracker.minX);
+      const boundingHeightPx = Math.max(0, coverageTracker.maxY - coverageTracker.minY);
+      boundingWidthInches = convertWidthPx(boundingWidthPx);
+      boundingHeightInches = convertHeightPx(boundingHeightPx);
+      boundingAreaInches = Number.isFinite(boundingWidthInches) && Number.isFinite(boundingHeightInches)
+        ? boundingWidthInches * boundingHeightInches
+        : null;
+      coverageRatio = gridAreaInches && boundingAreaInches
+        ? Math.min(1, boundingAreaInches / gridAreaInches)
+        : null;
+
+      const nextBounds = {
+        x: coverageTracker.minX,
+        y: coverageTracker.minY,
+        w: boundingWidthPx,
+        h: boundingHeightPx,
+      };
+      const prevBounds = coverageBounds.value;
+      const tolerance = 0.4;
+      const changed = !prevBounds ||
+        Math.abs(prevBounds.x - nextBounds.x) > tolerance ||
+        Math.abs(prevBounds.y - nextBounds.y) > tolerance ||
+        Math.abs(prevBounds.w - nextBounds.w) > tolerance ||
+        Math.abs(prevBounds.h - nextBounds.h) > tolerance;
+      if (changed) {
+        coverageBounds.value = nextBounds;
+      }
+    } else if (coverageBounds.value !== null) {
+      coverageBounds.value = null;
+    }
+
+    const sumAreaSquareInches = inspectorItems.length && Number.isFinite(inspectorAreaSum)
+      ? inspectorAreaSum
+      : null;
+
+    inspectorState[selectedView.value] = {
+      items: inspectorItems,
+      summary: {
+        view: selectedView.value,
+        elementsCount: inspectorItems.length,
+        sumAreaSquareInches,
+        coverageRatio,
+        bounds: {
+          widthInches: inspectorItems.length ? boundingWidthInches : null,
+          heightInches: inspectorItems.length ? boundingHeightInches : null,
+          areaSquareInches: inspectorItems.length ? boundingAreaInches : null,
+        },
+        grid: {
+          widthInches: gridWidthInches,
+          heightInches: gridHeightInches,
+          areaSquareInches: gridAreaInches,
+        },
+      },
+    };
 
     updatePreviewFor(selectedView.value, { skipBackground: !shirtBgLoaded.value });
   }
@@ -1949,6 +2560,133 @@
     fileInput.value?.click();
   }
 
+  function resolveElementIdentity(type: 'image' | 'text', payload: any) {
+    const providedType = typeof payload?.elementType === 'string' ? payload.elementType : null;
+    const providedVariant = typeof payload?.elementVariant === 'string' ? payload.elementVariant : null;
+    if (providedType) {
+      return {
+        elementType: providedType as any,
+        elementVariant: providedVariant ?? undefined,
+      };
+    }
+    if (type === 'text') {
+      return {
+        elementType: 'text' as const,
+        elementVariant: Array.isArray(payload?.font) ? payload.font[0] : (payload?.font ?? undefined),
+      };
+    }
+    if (payload?.shapeMeta || (typeof payload?.name === 'string' && payload.name.startsWith('shape:'))) {
+      const keyFromMeta = payload?.shapeMeta?.key ?? (typeof payload?.name === 'string' ? payload.name.split(':')[1] : undefined);
+      return {
+        elementType: 'shape' as const,
+        elementVariant: keyFromMeta ?? 'shape',
+      };
+    }
+    if (typeof payload?.name === 'string' && payload.name.includes(':')) {
+      const [, variant] = payload.name.split(':');
+      return {
+        elementType: 'icon' as const,
+        elementVariant: variant ?? 'icon',
+      };
+    }
+    const variant = payload?.isVector ? 'svg' : 'bitmap';
+    return {
+      elementType: 'image' as const,
+      elementVariant: variant,
+    };
+  }
+
+  function buildImageDisplayName(elementType: ElementType, elementVariant?: ElementVariant | null, providedName?: string | null | undefined) {
+    const cleaned = typeof providedName === 'string' ? providedName.trim() : '';
+    if (cleaned) {
+      if (elementType === 'shape' && cleaned.startsWith('shape:')) {
+        const key = cleaned.split(':')[1] || elementVariant || '';
+        return key ? `Shape ${key}` : 'Shape';
+      }
+      if (elementType === 'icon' && cleaned.includes(':')) {
+        const label = cleaned.split(':').pop();
+        return label ? `Icon ${label}` : 'Icon';
+      }
+      return cleaned;
+    }
+    if (elementType === 'shape') {
+      const key = elementVariant?.split(':').pop() ?? elementVariant ?? '';
+      return key ? `Shape ${key}` : 'Shape';
+    }
+    if (elementType === 'icon') {
+      const key = elementVariant?.split(':').pop() ?? elementVariant ?? '';
+      return key ? `Icon ${key}` : 'Icon';
+    }
+    return elementVariant === 'svg' ? 'Vector Image' : 'Image';
+  }
+
+  function toNumeric(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+  }
+
+  function formatInches(value: number | null | undefined, decimals = 1): string {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+    return `${value.toFixed(decimals)}″`;
+  }
+
+  function formatArea(value: number | null | undefined): string {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+    return `${value.toFixed(1)} sq in`;
+  }
+
+  function formatPercent(value: number | null | undefined): string {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+    return `${(value * 100).toFixed(1)}%`;
+  }
+
+  function inspectorItemLabel(item: InspectorItem): string {
+    const typeLabel = item.elementType
+      ? `${item.elementType.charAt(0).toUpperCase()}${item.elementType.slice(1)}`
+      : `${item.type.charAt(0).toUpperCase()}${item.type.slice(1)}`;
+    const variantRaw = item.elementVariant ?? '';
+    const variant =
+      typeof variantRaw === 'string' && variantRaw.includes(':')
+        ? variantRaw.split(':').pop()
+        : variantRaw;
+    const baseName = item.name && item.name.trim().length ? item.name.trim() : variant || typeLabel;
+    return variant && variant !== baseName ? `${typeLabel} · ${baseName}` : `${typeLabel} · ${baseName}`;
+  }
+
+  function inspectorItemMeta(item: InspectorItem): string {
+    const parts: string[] = [];
+    if (typeof item.widthInches === 'number' && typeof item.heightInches === 'number') {
+      parts.push(`${item.widthInches.toFixed(1)}″×${item.heightInches.toFixed(1)}″`);
+    }
+    if (typeof item.areaSquareInches === 'number') {
+      parts.push(`${item.areaSquareInches.toFixed(1)} sq in`);
+    }
+    if (typeof item.rotation === 'number' && Math.abs(item.rotation) > 0.01) {
+      parts.push(`${item.rotation.toFixed(0)}°`);
+    }
+    parts.push(`z${item.z}`);
+    return parts.join(' · ');
+  }
+
+  function toggleInspector() {
+    inspectorOpen.value = !inspectorOpen.value;
+  }
+
+  function handleInspectorSelect(id: string) {
+    const targetImage = images.find((img) => img.id === id);
+    const targetText = texts.find((txt) => txt.id === id);
+    const target = targetImage ?? targetText ?? null;
+    if (!target) return;
+    deselectAll();
+    target.isSelected = true;
+    selectedObject.value = target as any;
+    draw();
+  }
+
   // Unified object upload (image/text) with correct type signatures
   /**
    * Creates text or image objects and inserts them into the shared layer stack.
@@ -1977,13 +2715,50 @@
       img.src = payload.imgUrl;
 
       img.onload = () => {
-        deselectAll()
-        images.forEach(i => i.isSelected = false);
+        deselectAll();
+        images.forEach((i) => (i.isSelected = false));
 
-        const w = Math.min(img.width / 3, clothingDetails.value.grid.w);
-        const h = Math.min(img.height / 3, clothingDetails.value.grid.h);
+        const naturalWidth = img.naturalWidth || img.width || 1;
+        const naturalHeight = img.naturalHeight || img.height || 1;
+
+        const gridMetrics = resolveGrid();
+        const gridWidth = Number.isFinite(gridMetrics.w) && gridMetrics.w > 0
+          ? gridMetrics.w
+          : canvasWidth;
+        const gridHeight = Number.isFinite(gridMetrics.h) && gridMetrics.h > 0
+          ? gridMetrics.h
+          : canvasHeight;
+
+        const maxWidth = gridWidth * 0.75;
+        const maxHeight = gridHeight * 0.75;
+
+        const gridX = Number.isFinite(gridMetrics.x)
+          ? gridMetrics.x
+          : (canvasWidth - gridWidth) / 2;
+        const gridY = Number.isFinite(gridMetrics.y)
+          ? gridMetrics.y
+          : (canvasHeight - gridHeight) / 2;
+
+        const scaleCandidates = [
+          maxWidth / naturalWidth,
+          maxHeight / naturalHeight,
+          1,
+        ];
+
+        const validScales = scaleCandidates.filter((val) => Number.isFinite(val) && val > 0);
+        const scale = validScales.length ? Math.min(...validScales) : 1;
+
+        const w = Math.max(8, naturalWidth * scale);
+        const h = Math.max(8, naturalHeight * scale);
+
+        const centerX = gridX + (gridWidth - w) / 2;
+        const centerY = gridY + (gridHeight - h) / 2;
+
+        const aspect = naturalHeight !== 0 ? naturalWidth / naturalHeight : 1;
 
         const vectorHint = payload?.isVector ?? (typeof payload?.name === 'string' && payload.name.includes(':'));
+
+        const identity = resolveElementIdentity('image', payload);
 
         const newImage = {
           id: crypto.randomUUID?.() || Date.now().toString(),
@@ -1991,22 +2766,22 @@
           imgUrl: payload.imgUrl,
           img,
           showHandles: true,
-          x: clothingDetails.value.grid.x + (clothingDetails.value.grid.w - w) / 2,
-          y: clothingDetails.value.grid.y + (clothingDetails.value.grid.h - h) / 2,
+          x: centerX,
+          y: centerY,
           w,
           h,
-          aspect: img.width / img.height,
-          origW: img.width / 3,
-          origH: img.height / 3,
+          aspect,
+          origW: w,
+          origH: h,
           isSelected: true,
           z: zCounter.value++,
           rotation: 0,
           isVector: Boolean(vectorHint),
+          elementType: identity.elementType,
+          elementVariant: identity.elementVariant ?? (vectorHint ? 'svg' : 'bitmap'),
+          view: selectedView.value,
+          name: buildImageDisplayName(identity.elementType, identity.elementVariant ?? (vectorHint ? 'svg' : 'bitmap'), payload?.name),
         } as ImageObject & Record<string, any>;
-
-        if (payload?.name) {
-          newImage.name = payload.name;
-        }
 
         if (payload?.shapeMeta) {
           newImage.shapeMeta = payload.shapeMeta;
@@ -2021,11 +2796,19 @@
     if (type === 'text') {
       texts.forEach(t => t.isSelected = false);
 
+      const identity = resolveElementIdentity('text', payload);
+      const fontValue = Array.isArray(payload?.font)
+        ? payload.font[0]
+        : (payload?.font ?? 'Arial');
+      const textContent = typeof payload === 'string'
+        ? payload
+        : payload.value || payload.content || 'Sample Text';
+
       texts.push({
         id: crypto.randomUUID?.() || Date.now().toString(),
         type: 'text',
-        content: typeof payload === 'string' ? payload : payload.value || 'Sample Text',
-        font: payload.font || 'Arial',
+        content: textContent,
+        font: fontValue,
         color: payload.color || '#000000',
         outlineColor: payload.outlineColor || 'None',
         outlineWidth: payload.outlineWidth || 2,
@@ -2041,6 +2824,12 @@
         z: zCounter.value++,
         // 👇 NEW
         effect: { name: 'none', options: withDefaults('none') },
+        name: typeof payload?.name === 'string'
+          ? payload.name
+          : textContent?.slice(0, 24) || 'Text',
+        elementType: identity.elementType,
+        elementVariant: identity.elementVariant ?? fontValue,
+        view: selectedView.value,
       });
 
       draw();
@@ -2059,15 +2848,24 @@
     const incomingGrid = details.grid as DesignGrid | undefined;
 
     if (incomingGrid) {
-      clothingDetails.value.grid = {
-        ...resolveGrid(),
+      const mergedGrid = {
+        ...DEFAULT_GRID,
         ...incomingGrid,
       } as DesignGrid;
+      clothingDetails.value.grid = { ...mergedGrid };
+      viewGridState.Front = { ...mergedGrid };
+      viewGridState.Back = { ...mergedGrid };
+      viewGridInitialized.Front = true;
+      viewGridInitialized.Back = true;
     } else {
-      clothingDetails.value.grid = { ...DEFAULT_GRID };
+      const currentGrid = resolveGrid();
+      viewGridState.Front = { ...currentGrid };
+      viewGridState.Back = { ...currentGrid };
     }
 
-    requestAutoGrid(!backgroundChange);
+    if (!incomingGrid) {
+      requestAutoGrid(!backgroundChange);
+    }
 
     if (Object.prototype.hasOwnProperty.call(details, 'sizeMeasurements')) {
       clothingDetails.value.sizeMeasurements = hydrateSizeMeasurements(details.sizeMeasurements);
@@ -2127,6 +2925,10 @@
    */
   function clearClothing() {
     resetClothingDetails();
+    viewGridState.Front = { ...DEFAULT_GRID };
+    viewGridState.Back = { ...DEFAULT_GRID };
+    viewGridInitialized.Front = true;
+    viewGridInitialized.Back = false;
     viewToSrc.Front = '';
     viewToSrc.Back = '';
     viewMirrored.Front = false;
@@ -2179,7 +2981,11 @@
     draw();
   });
 
-  watch(() => clothingDetails.value.grid, () => {
+  watch(() => clothingDetails.value.grid, (grid) => {
+    const normalized = { ...DEFAULT_GRID, ...(grid || {}) } as DesignGrid;
+    viewGridState[selectedView.value] = normalized;
+    viewGridInitialized[selectedView.value] = true;
+    syncGridToCheckoutStore(normalized);
     draw();
   }, { deep: true });
 
@@ -2245,13 +3051,187 @@
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
   }
 
+  .pricing-coverage-outline {
+    position: absolute;
+    z-index: 1;
+    border: 2px dashed rgba(249, 115, 22, 0.85);
+    border-radius: 1rem;
+    background: rgba(249, 115, 22, 0.08);
+    pointer-events: none;
+    box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.18);
+    transition: all 120ms ease;
+  }
+
+  .design-inspector {
+    position: absolute;
+    top: 1.2rem;
+    right: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+    z-index: 3;
+  }
+
+  .design-inspector__toggle {
+    padding: 0.35rem 0.9rem;
+    border-radius: 9999px;
+    border: none;
+    background: rgba(15, 23, 42, 0.75);
+    color: #fff;
+    font-size: 0.75rem;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: transform 120ms ease, box-shadow 160ms ease;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.22);
+  }
+
+  .design-inspector__toggle:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.28);
+  }
+
+  .design-inspector__panel {
+    width: clamp(240px, 28vw, 320px);
+    max-height: 340px;
+    padding: 0.85rem;
+    border-radius: 1.1rem;
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .design-inspector__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .design-inspector__title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #0f172a;
+  }
+
+  .design-inspector__subtitle {
+    display: block;
+    font-size: 0.7rem;
+    color: #475569;
+    margin-top: 0.15rem;
+  }
+
+  .design-inspector__metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .design-inspector__metric {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.75rem;
+    color: #1f2937;
+  }
+
+  .design-inspector__metric-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #475569;
+  }
+
+  .design-inspector__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    overflow-y: auto;
+  }
+
+  .design-inspector__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.55rem 0.6rem;
+    border-radius: 0.75rem;
+    background: rgba(241, 245, 249, 0.7);
+    cursor: pointer;
+    transition: background 120ms ease, border 120ms ease;
+    border: 1px solid transparent;
+  }
+
+  .design-inspector__row:hover {
+    background: rgba(226, 232, 240, 0.9);
+  }
+
+  .design-inspector__row.is-active {
+    border-color: rgba(59, 130, 246, 0.55);
+    background: rgba(219, 234, 254, 0.85);
+  }
+
+  .design-inspector__item-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .design-inspector__item-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #0f172a;
+  }
+
+  .design-inspector__item-meta {
+    font-size: 0.68rem;
+    color: #475569;
+  }
+
+  .design-inspector__item-position {
+    font-size: 0.68rem;
+    color: #64748b;
+    white-space: nowrap;
+  }
+
+  .design-inspector__empty {
+    text-align: center;
+    font-size: 0.72rem;
+    color: #64748b;
+    padding: 0.4rem 0;
+  }
+
+  @media (max-width: 768px) {
+    .design-inspector {
+      top: auto;
+      bottom: 0.8rem;
+      right: 0.8rem;
+      align-items: stretch;
+    }
+
+    .design-inspector__panel {
+      width: min(95vw, 360px);
+      max-height: 50vh;
+    }
+
+    .design-inspector__metrics {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
   * {
     user-select: none;
   }
 
   .canvas {
     position: absolute;
-    z-index: 0;
+    z-index: 2;
     background: #fff;
     border-radius: 2rem;
     padding: 6px;
