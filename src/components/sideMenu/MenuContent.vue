@@ -656,32 +656,24 @@
     if (!entry) return;
 
     const chosenPrefix = selectedIconInfo.value?.prefix || iconPrefix;
-    const newUrl = buildIconApiUrl(
-      chosenPrefix,
-      entry.full,
-      1024,
-      textColor.value || undefined
-    );
+    const friendly = friendlyIconLabel(g.base);
 
-    so.imgUrl = newUrl;
-    so.isVector = true;
-
-    if (so.img && typeof so.img === 'object') {
-      so.img.onload = () => props.draw();
-      so.img.crossOrigin = 'anonymous';
-      so.img.src = newUrl;
-    } else {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => props.draw();
-      img.src = newUrl;
-      so.img = img;
-    }
-
-    so.elementType = 'icon';
-    so.elementVariant = `${chosenPrefix}:${entry.full}`;
-    const friendly = g.base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-    so.name = friendly;
+    (async () => {
+      const newUrl = await buildTrimmedIconDataUrl(
+        chosenPrefix,
+        entry.full,
+        1024,
+        textColor.value || undefined,
+      );
+      applyIconImage(so, {
+        url: newUrl,
+        prefix: chosenPrefix,
+        full: entry.full,
+        friendlyName: friendly,
+      });
+    })().catch((error) => {
+      console.warn('[Icons] Failed to update icon variant', { entry, error });
+    });
   }, { flush: 'post' });
 
   /* ---------------------------------------------------------
@@ -762,12 +754,18 @@
   }
 
   // click → place selected variant if exists else fallback
-  function chooseIcon(g: IconGroup) {
+  async function chooseIcon(g: IconGroup) {
     const name = pickEntryForPreview(g);
     const variantId = `${iconPrefix}:${name}`;
-    const friendlyName = g.base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    const friendlyName = friendlyIconLabel(g.base);
+    const imgUrl = await buildTrimmedIconDataUrl(
+      iconPrefix,
+      name,
+      1024,
+      textColor.value || undefined,
+    );
     emit('uploadObject', 'image', {
-      imgUrl: buildIconApiUrl(iconPrefix, name, 512, textColor.value || undefined),
+      imgUrl,
       isVector: true,
       elementType: 'icon',
       elementVariant: variantId,
@@ -880,49 +878,95 @@
     return u;
   }
 
-  function applySelectedIconColor() {
+  function friendlyIconLabel(base: string): string {
+    return base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  async function buildTrimmedIconDataUrl(
+    prefix: string,
+    fullName: string,
+    size = 1024,
+    color?: string,
+  ): Promise<string> {
+    const apiUrl = buildIconApiUrl(prefix, fullName, size, color);
+    try {
+      const response = await fetch(apiUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const markup = await response.text();
+      const trimmed = trimSvgWhitespace(markup);
+      return svgDataUrlWithId(trimmed, `${prefix}:${fullName}`);
+    } catch (error) {
+      console.warn('[Icons] Failed to trim icon SVG; using original URL.', { prefix, fullName, error });
+      return apiUrl;
+    }
+  }
+
+  function applyIconImage(
+    so: any,
+    payload: { url: string; prefix: string; full: string; friendlyName: string },
+  ) {
+    so.imgUrl = payload.url;
+    so.isVector = true;
+    so.elementType = 'icon';
+    so.elementVariant = `${payload.prefix}:${payload.full}`;
+    so.name = payload.friendlyName;
+
+    if (so.img && typeof so.img === 'object') {
+      so.img.onload = () => props.draw();
+      so.img.crossOrigin = 'anonymous';
+      so.img.src = payload.url;
+    } else {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => props.draw();
+      img.src = payload.url;
+      so.img = img;
+    }
+  }
+
+  async function applySelectedIconColor() {
     const so = selectedObject.value as any;
     const info = selectedIconInfo.value;
     if (!so || !info) return; // nothing selected or not an icon
 
     const chosenPrefix = info.prefix || iconPrefix;
-    const newUrl = buildIconApiUrl(chosenPrefix, info.full!, 1024, textColor.value || undefined);
+    const friendly = friendlyIconLabel(info.base);
+    const newUrl = await buildTrimmedIconDataUrl(
+      chosenPrefix,
+      info.full!,
+      1024,
+      textColor.value || undefined,
+    );
 
-    so.imgUrl = newUrl;
-    so.isVector = true;
-    so.elementType = 'icon';
-    so.elementVariant = `${chosenPrefix}:${info.full}`;
-    const friendly = info.base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-    so.name = friendly;
-
-    if (so.img && typeof so.img === 'object') {
-      so.img.onload = () => props.draw();
-      so.img.crossOrigin = 'anonymous';
-      so.img.src = newUrl;
-    } else {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => props.draw();
-      img.src = newUrl;
-      so.img = img;
-    }
+    applyIconImage(so, {
+      url: newUrl,
+      prefix: chosenPrefix,
+      full: info.full!,
+      friendlyName: friendly,
+    });
   }
 
   // whenever the swatch changes, recolor the selected icon
-  watch(textColor, () => applySelectedIconColor());
+  watch(textColor, () => { void applySelectedIconColor(); });
 
   // optional: when selection changes, try to sync textColor from URL (?color=...)
-  function parseColorParam(url: string): string {
+  function parseColorParam(url: string): string | null {
     try {
+      if (!url || url.startsWith('data:')) return null;
       const q = url.split('?')[1] || '';
       const p = new URLSearchParams(q);
       const c = p.get('color');
       return c ? decodeURIComponent(c) : '';
-    } catch { return ''; }
+    } catch { return null; }
   }
   watch(selectedObject, (so) => {
     if (!so || typeof so.imgUrl !== 'string') return;
-    textColor.value = parseColorParam(so.imgUrl || '');
+    const color = parseColorParam(so.imgUrl || '');
+    if (color !== null) {
+      textColor.value = color;
+    }
   });
 
   type ShapeMeta = {
@@ -1110,11 +1154,21 @@
 
   function trimSvgWhitespace(
     svgMarkup: string,
-    options: { useUnitViewBox: boolean; baseWidth: number; baseHeight: number },
+    options?: { useUnitViewBox?: boolean; baseWidth?: number; baseHeight?: number },
   ): string {
     if (typeof document === 'undefined' || typeof DOMParser === 'undefined' || !document.body) {
       return svgMarkup;
     }
+
+    const parseLength = (raw: string | null): number | null => {
+      if (!raw) return null;
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      const match = trimmed.match(/^(-?\d+(?:\.\d+)?)(?:px)?$/i);
+      if (!match) return null;
+      const num = Number.parseFloat(match[1]);
+      return Number.isFinite(num) ? num : null;
+    };
 
     try {
       const parser = new DOMParser();
@@ -1123,6 +1177,20 @@
       if (!svgEl || svgEl.nodeName.toLowerCase() !== 'svg') {
         return svgMarkup;
       }
+
+      const originalViewBoxAttr = svgEl.getAttribute('viewBox');
+      let originalViewBoxWidth: number | null = null;
+      let originalViewBoxHeight: number | null = null;
+      if (originalViewBoxAttr) {
+        const parts = originalViewBoxAttr.trim().split(/\s+/).map(Number);
+        if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+          originalViewBoxWidth = parts[2];
+          originalViewBoxHeight = parts[3];
+        }
+      }
+
+      const originalWidth = parseLength(svgEl.getAttribute('width'));
+      const originalHeight = parseLength(svgEl.getAttribute('height'));
 
       const imported = document.importNode(svgEl, true) as SVGSVGElement;
       imported.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
@@ -1172,10 +1240,24 @@
       svgEl.setAttribute('viewBox', `${left} ${top} ${widthUnits} ${heightUnits}`);
       svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
 
-      const scaleX = options.useUnitViewBox ? options.baseWidth / 100 : 1;
-      const scaleY = options.useUnitViewBox ? options.baseHeight / 100 : 1;
-      const widthPx = Math.max(1, Math.round(widthUnits * scaleX));
-      const heightPx = Math.max(1, Math.round(heightUnits * scaleY));
+      const useUnitViewBox = options?.useUnitViewBox ?? false;
+
+      const targetWidth = options && Number.isFinite(options.baseWidth)
+        ? Number(options.baseWidth)
+        : (originalWidth ?? originalViewBoxWidth ?? widthUnits);
+      const targetHeight = options && Number.isFinite(options.baseHeight)
+        ? Number(options.baseHeight)
+        : (originalHeight ?? originalViewBoxHeight ?? heightUnits);
+
+      const widthScale = useUnitViewBox
+        ? (targetWidth / 100)
+        : (targetWidth / Math.max(widthUnits, 1));
+      const heightScale = useUnitViewBox
+        ? (targetHeight / 100)
+        : (targetHeight / Math.max(heightUnits, 1));
+
+      const widthPx = Math.max(1, Math.round(widthUnits * widthScale));
+      const heightPx = Math.max(1, Math.round(heightUnits * heightScale));
 
       svgEl.setAttribute('width', `${widthPx}`);
       svgEl.setAttribute('height', `${heightPx}`);

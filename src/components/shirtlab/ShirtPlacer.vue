@@ -5,64 +5,7 @@
 
       <canvas ref="canvas" :width="canvasWidth" :height="canvasHeight" style="display:block;"
         :style="{ cursor: canvasCursor }" @mousedown="startDrag" @mousemove="onMove" @mouseup="stopDrag" />
-      <div
-        v-if="coverageOverlayStyle"
-        class="pricing-coverage-outline"
-        :style="coverageOverlayStyle"
-      />
-      <div class="design-inspector" :class="{ 'design-inspector--collapsed': !inspectorOpen }">
-        <button class="design-inspector__toggle" type="button" @click="toggleInspector">
-          {{ inspectorOpen ? 'Hide inspector' : 'Show inspector' }}
-        </button>
-        <div v-if="inspectorOpen" class="design-inspector__panel">
-          <header class="design-inspector__header">
-            <div>
-              <span class="design-inspector__title">{{ selectedView }} inventory</span>
-              <small class="design-inspector__subtitle">
-                {{ inspectorSummary.elementsCount }} item{{ inspectorSummary.elementsCount === 1 ? '' : 's' }}
-              </small>
-            </div>
-          </header>
-          <div class="design-inspector__metrics">
-            <div class="design-inspector__metric">
-              <span class="design-inspector__metric-label">Grid</span>
-              <strong>
-                {{ formatInches(inspectorSummary.grid.widthInches) }} ×
-                {{ formatInches(inspectorSummary.grid.heightInches) }}
-              </strong>
-            </div>
-            <div class="design-inspector__metric">
-              <span class="design-inspector__metric-label">Bounds</span>
-              <strong v-if="inspectorSummary.bounds.widthInches !== null">
-                {{ formatInches(inspectorSummary.bounds.widthInches) }} ×
-                {{ formatInches(inspectorSummary.bounds.heightInches) }}
-              </strong>
-              <strong v-else>—</strong>
-            </div>
-            <div class="design-inspector__metric">
-              <span class="design-inspector__metric-label">Coverage</span>
-              <strong>{{ formatPercent(inspectorSummary.coverageRatio) }}</strong>
-            </div>
-            <div class="design-inspector__metric">
-              <span class="design-inspector__metric-label">Total area</span>
-              <strong>{{ formatArea(inspectorSummary.sumAreaSquareInches) }}</strong>
-            </div>
-          </div>
-          <ul class="design-inspector__list">
-            <li v-for="item in inspectorItems" :key="item.id" :class="{ 'is-active': item.id === selectedInspectorId }"
-              class="design-inspector__row" @click="handleInspectorSelect(item.id)">
-              <div class="design-inspector__item-info">
-                <span class="design-inspector__item-title">{{ inspectorItemLabel(item) }}</span>
-                <small class="design-inspector__item-meta">{{ inspectorItemMeta(item) }}</small>
-              </div>
-              <span class="design-inspector__item-position">
-                {{ Math.round(item.position.x) }},{{ Math.round(item.position.y) }}
-              </span>
-            </li>
-            <li v-if="!inspectorItems.length" class="design-inspector__empty">No elements placed.</li>
-          </ul>
-        </div>
-      </div>
+      <div v-if="coverageOverlayStyle" class="pricing-coverage-outline" :style="coverageOverlayStyle" />
       <!-- Vue icon handles for selected image -->
       <div v-if="selectedObject && selectedObject.type === 'image'">
         <div class="canvas" v-for="(handle, index) in ['delete', 'resize', 'duplicate', 'rotate']" :key="handle" :style="{
@@ -3054,11 +2997,10 @@
   .pricing-coverage-outline {
     position: absolute;
     z-index: 1;
-    border: 2px dashed rgba(249, 115, 22, 0.85);
+
     border-radius: 1rem;
-    background: rgba(249, 115, 22, 0.08);
+
     pointer-events: none;
-    box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.18);
     transition: all 120ms ease;
   }
 
