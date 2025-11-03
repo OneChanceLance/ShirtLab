@@ -1,20 +1,42 @@
 import type { CartItemDesignPreviews } from '../stores/cart';
 import type { DesignViewName, SerializedDesignState } from '../types/designState';
+import { getAABB } from '../components/shirtlab/utils/geometry';
+
+// --- Element identity metadata (cross-file contract) ---
+type ElementTypeKind = 'image' | 'text' | 'icon' | 'shape';
+type ElementVariantKind = string; // e.g., 'bitmap' | 'svg' | 'square' | 'circle' | font family, etc.
+
+interface ElementInventorySummary {
+  index: number;
+  type: 'image' | 'text';
+  elementType?: ElementTypeKind;
+  elementVariant?: ElementVariantKind;
+  name?: string | null;
+  x: number;
+  y: number;
+  rotation: number;
+  widthInches: number;
+  heightInches: number;
+  areaSquareInches: number;
+}
 
 export type DesignCategory = 'full' | 'left';
 
 export interface DesignChargeDetail {
   view: DesignViewName;
   elementIndex?: number;
-  elementType?: 'image' | 'text';
+  elementType?: 'image' | 'text' | 'icon' | 'shape' | 'composite';
   category: DesignCategory;
   basePrice: number;
   multiplier: number;
   charge: number;
   widthInches?: number;
   heightInches?: number;
+  areaSquareInches?: number;
   coverageRatio?: number;
   source: 'bounds' | 'preview';
+  items?: ElementInventorySummary[];
+  elementsCount?: number;
 }
 
 export interface QuantityDiscountDetail {
@@ -43,9 +65,9 @@ export interface PricingInput {
 }
 
 const DESIGN_PRICE_THRESHOLD_INCHES = 8;
-const DESIGN_FULL_PRICE = 18;
-const DESIGN_LEFT_PRICE = 10;
-const SECOND_SIDE_DISCOUNT = 0.5;
+const DESIGN_LARGE_PRICE = 15;
+const DESIGN_SMALL_PRICE = 10;
+const SECOND_SIDE_DISCOUNT = 1;
 const DEFAULT_PIXELS_PER_INCH = 40;
 const FULL_GRID_RATIO_THRESHOLD = 0.7;
 
@@ -156,6 +178,12 @@ type DesignElement = {
   heightPx: number;
   index: number;
   type: 'image' | 'text';
+  x: number;
+  y: number;
+  rotation: number;
+  elementType?: ElementTypeKind;
+  elementVariant?: ElementVariantKind;
+  name?: string | null;
 };
 
 function extractDesignElements(view: SerializedDesignState['views'][DesignViewName] | undefined | null): DesignElement[] {
@@ -172,6 +200,12 @@ function extractDesignElements(view: SerializedDesignState['views'][DesignViewNa
         heightPx,
         index: idx,
         type: 'image',
+        x: toNumber((img as any)?.x) ?? 0,
+        y: toNumber((img as any)?.y) ?? 0,
+        rotation: toNumber((img as any)?.rotation) ?? 0,
+        elementType: (img as any)?.elementType ?? ((img as any)?.shapeMeta?.kind ? 'shape' : 'image'),
+        elementVariant: (img as any)?.elementVariant ?? (img as any)?.shapeMeta?.kind ?? ((img as any)?.vectorHint ? 'svg' : 'bitmap'),
+        name: (img as any)?.name ?? (img as any)?.label ?? null,
       });
     }
   });
@@ -186,6 +220,12 @@ function extractDesignElements(view: SerializedDesignState['views'][DesignViewNa
         heightPx,
         index: idx,
         type: 'text',
+        x: toNumber((txt as any)?.x) ?? 0,
+        y: toNumber((txt as any)?.y) ?? 0,
+        rotation: toNumber((txt as any)?.rotation) ?? 0,
+        elementType: (txt as any)?.elementType ?? 'text',
+        elementVariant: (txt as any)?.elementVariant ?? (txt as any)?.font ?? (txt as any)?.fontFamily ?? undefined,
+        name: (txt as any)?.name ?? (txt as any)?.text ?? null,
       });
     }
   });
@@ -207,6 +247,20 @@ function classifyDesignCategory(
   const gridHeightInches = toNumber((grid as any)?.heightInches ?? (grid as any)?.physicalHeight ?? (grid as any)?.heightIn ?? (grid as any)?.height_in);
   const gridPpi = computeGridPixelsPerInch(grid) ?? fallbackPpi ?? DEFAULT_PIXELS_PER_INCH;
 
+  const gridWidthEstimateInches = gridWidthInches && gridWidthInches > 0
+    ? gridWidthInches
+    : gridWidthPx && gridWidthPx > 0
+      ? gridWidthPx / gridPpi
+      : null;
+  const gridHeightEstimateInches = gridHeightInches && gridHeightInches > 0
+    ? gridHeightInches
+    : gridHeightPx && gridHeightPx > 0
+      ? gridHeightPx / gridPpi
+      : null;
+  const gridAreaInches = gridWidthEstimateInches && gridHeightEstimateInches
+    ? gridWidthEstimateInches * gridHeightEstimateInches
+    : null;
+
   const elements = extractDesignElements(designState?.views?.[viewName]);
   const trimmedPreview = previews?.[viewName];
   const hasPreview = typeof trimmedPreview === 'string' && trimmedPreview.trim().length > 0;
@@ -214,16 +268,16 @@ function classifyDesignCategory(
 
   if (!elements.length) {
     if (!hasPreview) {
-      logger?.(`No ${viewName} design detected.`);
+      logger?.(`❌ No ${viewName} design detected.`);
       return charges;
     }
-    logger?.(`Detected ${viewName} preview without bounds; treating as left-chest charge.`, { view: viewName });
+    logger?.(`Detected ${viewName} preview without bounds; treating as small-area charge.`, { view: viewName });
     charges.push({
       view: viewName,
       category: 'left',
-      basePrice: DESIGN_LEFT_PRICE,
+      basePrice: DESIGN_SMALL_PRICE,
       multiplier: 1,
-      charge: DESIGN_LEFT_PRICE,
+      charge: DESIGN_SMALL_PRICE,
       source: 'preview',
     });
     return charges;
@@ -235,59 +289,155 @@ function classifyDesignCategory(
     gridInches: number | null,
     ppi: number,
   ): number => {
+    if (ppi && Number.isFinite(ppi) && ppi > 0) {
+      return boundsPx / ppi;
+    }
     if (gridPx && gridPx > 0 && gridInches && gridInches > 0) {
       const ratio = boundsPx / gridPx;
       return ratio * gridInches;
     }
-    if (ppi && ppi > 0) {
-      return boundsPx / ppi;
-    }
     return boundsPx / DEFAULT_PIXELS_PER_INCH;
   };
+
+  const areaThresholdSqInches = DESIGN_PRICE_THRESHOLD_INCHES * DESIGN_PRICE_THRESHOLD_INCHES;
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  const inventory: ElementInventorySummary[] = [];
 
   elements.forEach((element) => {
     const widthInches = computeDimension(element.widthPx, gridWidthPx, gridWidthInches, gridPpi);
     const heightInches = computeDimension(element.heightPx, gridHeightPx, gridHeightInches, gridPpi);
-    const widthRatio = gridWidthPx && gridWidthPx > 0 ? element.widthPx / gridWidthPx : null;
-    const heightRatio = gridHeightPx && gridHeightPx > 0 ? element.heightPx / gridHeightPx : null;
-
-    let isFull = false;
-    if (
-      (typeof widthRatio === 'number' && widthRatio >= FULL_GRID_RATIO_THRESHOLD) ||
-      (typeof heightRatio === 'number' && heightRatio >= FULL_GRID_RATIO_THRESHOLD)
-    ) {
-      isFull = true;
-    } else if (widthInches > DESIGN_PRICE_THRESHOLD_INCHES || heightInches > DESIGN_PRICE_THRESHOLD_INCHES) {
-      isFull = true;
-    }
-
-    const base = isFull ? DESIGN_FULL_PRICE : DESIGN_LEFT_PRICE;
-    const chargeDetail: DesignChargeDetail = {
-      view: viewName,
-      elementIndex: element.index,
-      elementType: element.type,
-      category: isFull ? 'full' : 'left',
-      basePrice: base,
-      multiplier: 1,
-      charge: base,
+    const areaInches = widthInches * heightInches;
+    inventory.push({
+      index: element.index,
+      type: element.type,
+      elementType: element.elementType,
+      elementVariant: element.elementVariant,
+      name: element.name ?? null,
+      x: element.x,
+      y: element.y,
+      rotation: element.rotation ?? 0,
       widthInches,
       heightInches,
-      coverageRatio: Math.max(
-        typeof widthRatio === 'number' ? widthRatio : 0,
-        typeof heightRatio === 'number' ? heightRatio : 0,
-      ),
-      source: 'bounds',
-    };
-
-    logger?.(`Measured ${viewName} ${element.type} #${element.index}`, {
-      widthInches: widthInches.toFixed(2),
-      heightInches: heightInches.toFixed(2),
-      widthRatio: widthRatio !== null ? widthRatio.toFixed(2) : null,
-      heightRatio: heightRatio !== null ? heightRatio.toFixed(2) : null,
-      category: chargeDetail.category,
+      areaSquareInches: areaInches,
     });
 
-    charges.push(chargeDetail);
+    const aabb = getAABB({
+      x: element.x,
+      y: element.y,
+      w: element.widthPx,
+      h: element.heightPx,
+      rotation: element.rotation ?? 0,
+    });
+
+    if (aabb.minX < minX) minX = aabb.minX;
+    if (aabb.minY < minY) minY = aabb.minY;
+    if (aabb.maxX > maxX) maxX = aabb.maxX;
+    if (aabb.maxY > maxY) maxY = aabb.maxY;
+  });
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    logger?.(`Unable to determine bounds for ${viewName}; falling back to preview pricing.`);
+    charges.push({
+      view: viewName,
+      category: 'left',
+      basePrice: DESIGN_SMALL_PRICE,
+      multiplier: 1,
+      charge: DESIGN_SMALL_PRICE,
+      source: 'bounds',
+    });
+    return charges;
+  }
+
+  const sumAABBInchesSq = inventory.reduce((acc, it) => acc + (Number.isFinite(it.areaSquareInches) ? it.areaSquareInches : 0), 0);
+
+  const boundingWidthPx = Math.max(0, maxX - minX);
+  const boundingHeightPx = Math.max(0, maxY - minY);
+
+  const boundingWidthInches = computeDimension(boundingWidthPx, gridWidthPx, gridWidthInches, gridPpi);
+  const boundingHeightInches = computeDimension(boundingHeightPx, gridHeightPx, gridHeightInches, gridPpi);
+  const boundingAreaInches = boundingWidthInches * boundingHeightInches;
+
+  if (!Number.isFinite(boundingAreaInches) || boundingAreaInches <= 0) {
+    logger?.(`Combined bounds for ${viewName} produced no measurable area; applying minimum charge.`);
+    charges.push({
+      view: viewName,
+      category: 'left',
+      basePrice: DESIGN_SMALL_PRICE,
+      multiplier: 1,
+      charge: DESIGN_SMALL_PRICE,
+      source: 'bounds',
+    });
+    return charges;
+  }
+
+  const widthRatio = gridWidthPx && gridWidthPx > 0 ? boundingWidthPx / gridWidthPx : null;
+  const heightRatio = gridHeightPx && gridHeightPx > 0 ? boundingHeightPx / gridHeightPx : null;
+  const areaCoverageRatio = gridAreaInches && gridAreaInches > 0
+    ? Math.min(1, boundingAreaInches / gridAreaInches)
+    : null;
+
+  const isLarge =
+    boundingAreaInches >= areaThresholdSqInches ||
+    (typeof areaCoverageRatio === 'number' && areaCoverageRatio >= FULL_GRID_RATIO_THRESHOLD);
+
+  const base = isLarge ? DESIGN_LARGE_PRICE : DESIGN_SMALL_PRICE;
+  const coverageForDetail = typeof areaCoverageRatio === 'number'
+    ? areaCoverageRatio
+    : Math.max(
+      typeof widthRatio === 'number' ? widthRatio : 0,
+      typeof heightRatio === 'number' ? heightRatio : 0,
+    );
+
+  logger?.('design:view-report', {
+    view: viewName,
+    summary: {
+      bounds: {
+        widthInches: boundingWidthInches,
+        heightInches: boundingHeightInches,
+        areaSquareInches: boundingAreaInches,
+      },
+      coverageRatio: coverageForDetail,
+      priceTier: isLarge ? 'large' : 'small',
+      sumAABBInchesSq,
+      elementsCount: inventory.length,
+      grid: {
+        widthInches: gridWidthEstimateInches,
+        heightInches: gridHeightEstimateInches,
+        areaSquareInches: gridAreaInches ?? null,
+      },
+    },
+    items: inventory.map((it) => ({
+      index: it.index,
+      elementType: it.elementType ?? it.type,
+      elementVariant: it.elementVariant ?? null,
+      name: it.name ?? '',
+      widthInches: it.widthInches,
+      heightInches: it.heightInches,
+      areaSquareInches: it.areaSquareInches,
+      position: { x: it.x, y: it.y },
+      rotation: it.rotation,
+    })),
+  });
+
+  charges.push({
+    view: viewName,
+    elementType: 'composite',
+    category: isLarge ? 'full' : 'left',
+    basePrice: base,
+    multiplier: 1,
+    charge: base,
+    widthInches: boundingWidthInches,
+    heightInches: boundingHeightInches,
+    areaSquareInches: boundingAreaInches,
+    coverageRatio: coverageForDetail,
+    source: 'bounds',
+    items: inventory,
+    elementsCount: inventory.length,
   });
 
   return charges;
@@ -319,7 +469,7 @@ export function calculatePricing(input: PricingInput): PricingBreakdown {
         multiplier,
         charge,
       });
-      logger?.(`Applied ${index === 0 ? 'primary' : 'secondary'} ${detail.category} design charge`, {
+      logger?.(`✅ Applied ${index === 0 ? 'primary' : 'secondary'} ${detail.category} design charge`, {
         view: viewName,
         elementIndex: detail.elementIndex,
         elementType: detail.elementType,

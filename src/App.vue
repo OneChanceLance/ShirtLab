@@ -21,7 +21,6 @@
 
     </div>
 
-
   </div>
 </template>
 
@@ -129,7 +128,11 @@
     }
 
     if (type === 'image') {
-      const isShape = Boolean((val as any).shapeMeta || (typeof (val as any).name === 'string' && (val as any).name.startsWith('shape:')));
+      const elementType = typeof (val as any).elementType === 'string' ? (val as any).elementType : null;
+      const elementVariant = typeof (val as any).elementVariant === 'string' ? (val as any).elementVariant : null;
+      const isShape = elementType === 'shape'
+        || Boolean((val as any).shapeMeta)
+        || (typeof (val as any).name === 'string' && (val as any).name.startsWith('shape:'));
       if (isShape) {
         activeMenu.value = 'Shapes';
         headerTitle.value = 'Choose Shape';
@@ -137,8 +140,10 @@
         return;
       }
 
-      const isVector = Boolean((val as any).isVector || (typeof (val as any).name === 'string' && (val as any).name.includes(':')));
-      if (isVector) {
+      const isIcon = elementType === 'icon'
+        || Boolean((val as any).isVector && elementVariant && elementVariant.includes(':'))
+        || (typeof (val as any).name === 'string' && (val as any).name.includes(':'));
+      if (isIcon) {
         activeMenu.value = 'Icons';
         headerTitle.value = 'Select Icon';
         isSelectionMenu.value = true;

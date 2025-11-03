@@ -1,3 +1,6 @@
+export type ElementType = 'image' | 'text' | 'icon' | 'shape';
+export type ElementVariant = string;
+
 export type ImageObject = {
     id: string;
     type: 'image';
@@ -17,6 +20,9 @@ export type ImageObject = {
     isVector?: boolean;
     name?: string;
     shapeMeta?: Record<string, any>;
+    elementType: ElementType;
+    elementVariant?: ElementVariant;
+    view: 'Front' | 'Back';
 };
 
 export type TextObject = {
@@ -38,6 +44,10 @@ export type TextObject = {
     h: number;
     effect: TextEffect;
     isSelected: boolean;
+    name?: string;
+    elementType: ElementType;
+    elementVariant?: ElementVariant;
+    view: 'Front' | 'Back';
 };
 
 export type ColorOption = {

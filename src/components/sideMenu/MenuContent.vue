@@ -429,6 +429,15 @@
     const byUrl = parseIconFromUrl(so?.imgUrl || so?.src || '');
     if (byUrl.full) return byUrl;
 
+    if (so?.elementType === 'icon' && typeof so.elementVariant === 'string') {
+      const variant = so.elementVariant;
+      if (variant.includes(':')) {
+        const [p, rest] = variant.split(':');
+        if (p && rest) return { prefix: p, full: rest };
+      }
+      return { prefix: undefined, full: variant };
+    }
+
     // 2) Fallback to name like "mdi:home" or "material-symbols:star-outline"
     if (typeof so?.name === 'string' && so.name.includes(':')) {
       const [p, rest] = so.name.split(':');
@@ -472,6 +481,12 @@
       return { key, type, meta: so.shapeMeta };
     }
 
+    if (so?.elementType === 'shape' && typeof so.elementVariant === 'string') {
+      const key = so.elementVariant;
+      const item = SHAPES.find(s => s.key === key);
+      return { key, type: item?.type, meta: so.shapeMeta };
+    }
+
     // 2) Name like "shape:rect"
     if (typeof so.name === 'string' && so.name.startsWith(`${SHAPE_ID_PREFIX}:`)) {
       const key = so.name.slice(SHAPE_ID_PREFIX.length + 1);
@@ -494,7 +509,7 @@
     const so = selectedObject.value as any;
     if (!so || so.type !== 'image') return null;
     // ignore shapes masquerading as images
-    if (so.shapeMeta || (typeof so.name === 'string' && so.name.startsWith('shape:'))) return null;
+    if (so.elementType === 'shape' || so.shapeMeta || (typeof so.name === 'string' && so.name.startsWith('shape:'))) return null;
 
     const { full, prefix } = parseIconFromAny(so);
     if (!full) return null;
@@ -641,29 +656,24 @@
     if (!entry) return;
 
     const chosenPrefix = selectedIconInfo.value?.prefix || iconPrefix;
-    const newUrl = buildIconApiUrl(
-      chosenPrefix,
-      entry.full,
-      1024,
-      textColor.value || undefined
-    );
+    const friendly = friendlyIconLabel(g.base);
 
-    so.imgUrl = newUrl;
-    so.isVector = true;
-
-    if (so.img && typeof so.img === 'object') {
-      so.img.onload = () => props.draw();
-      so.img.crossOrigin = 'anonymous';
-      so.img.src = newUrl;
-    } else {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => props.draw();
-      img.src = newUrl;
-      so.img = img;
-    }
-
-    try { so.name = `${chosenPrefix}:${entry.full}`; } catch { /* noop */ }
+    (async () => {
+      const newUrl = await buildTrimmedIconDataUrl(
+        chosenPrefix,
+        entry.full,
+        1024,
+        textColor.value || undefined,
+      );
+      applyIconImage(so, {
+        url: newUrl,
+        prefix: chosenPrefix,
+        full: entry.full,
+        friendlyName: friendly,
+      });
+    })().catch((error) => {
+      console.warn('[Icons] Failed to update icon variant', { entry, error });
+    });
   }, { flush: 'post' });
 
   /* ---------------------------------------------------------
@@ -744,12 +754,22 @@
   }
 
   // click → place selected variant if exists else fallback
-  function chooseIcon(g: IconGroup) {
+  async function chooseIcon(g: IconGroup) {
     const name = pickEntryForPreview(g);
+    const variantId = `${iconPrefix}:${name}`;
+    const friendlyName = friendlyIconLabel(g.base);
+    const imgUrl = await buildTrimmedIconDataUrl(
+      iconPrefix,
+      name,
+      1024,
+      textColor.value || undefined,
+    );
     emit('uploadObject', 'image', {
-      imgUrl: buildIconApiUrl(iconPrefix, name, 512, textColor.value || undefined),
+      imgUrl,
       isVector: true,
-      name: `${iconPrefix}:${name}`,
+      elementType: 'icon',
+      elementVariant: variantId,
+      name: friendlyName,
     });
   }
 
@@ -858,46 +878,95 @@
     return u;
   }
 
-  function applySelectedIconColor() {
+  function friendlyIconLabel(base: string): string {
+    return base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  async function buildTrimmedIconDataUrl(
+    prefix: string,
+    fullName: string,
+    size = 1024,
+    color?: string,
+  ): Promise<string> {
+    const apiUrl = buildIconApiUrl(prefix, fullName, size, color);
+    try {
+      const response = await fetch(apiUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const markup = await response.text();
+      const trimmed = trimSvgWhitespace(markup);
+      return svgDataUrlWithId(trimmed, `${prefix}:${fullName}`);
+    } catch (error) {
+      console.warn('[Icons] Failed to trim icon SVG; using original URL.', { prefix, fullName, error });
+      return apiUrl;
+    }
+  }
+
+  function applyIconImage(
+    so: any,
+    payload: { url: string; prefix: string; full: string; friendlyName: string },
+  ) {
+    so.imgUrl = payload.url;
+    so.isVector = true;
+    so.elementType = 'icon';
+    so.elementVariant = `${payload.prefix}:${payload.full}`;
+    so.name = payload.friendlyName;
+
+    if (so.img && typeof so.img === 'object') {
+      so.img.onload = () => props.draw();
+      so.img.crossOrigin = 'anonymous';
+      so.img.src = payload.url;
+    } else {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => props.draw();
+      img.src = payload.url;
+      so.img = img;
+    }
+  }
+
+  async function applySelectedIconColor() {
     const so = selectedObject.value as any;
     const info = selectedIconInfo.value;
     if (!so || !info) return; // nothing selected or not an icon
 
     const chosenPrefix = info.prefix || iconPrefix;
-    const newUrl = buildIconApiUrl(chosenPrefix, info.full!, 1024, textColor.value || undefined);
+    const friendly = friendlyIconLabel(info.base);
+    const newUrl = await buildTrimmedIconDataUrl(
+      chosenPrefix,
+      info.full!,
+      1024,
+      textColor.value || undefined,
+    );
 
-    so.imgUrl = newUrl;
-    so.isVector = true;
-
-    if (so.img && typeof so.img === 'object') {
-      so.img.onload = () => props.draw();
-      so.img.crossOrigin = 'anonymous';
-      so.img.src = newUrl;
-    } else {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => props.draw();
-      img.src = newUrl;
-      so.img = img;
-    }
-    try { so.name = `${chosenPrefix}:${info.full}`; } catch { /* noop */ }
+    applyIconImage(so, {
+      url: newUrl,
+      prefix: chosenPrefix,
+      full: info.full!,
+      friendlyName: friendly,
+    });
   }
 
   // whenever the swatch changes, recolor the selected icon
-  watch(textColor, () => applySelectedIconColor());
+  watch(textColor, () => { void applySelectedIconColor(); });
 
   // optional: when selection changes, try to sync textColor from URL (?color=...)
-  function parseColorParam(url: string): string {
+  function parseColorParam(url: string): string | null {
     try {
+      if (!url || url.startsWith('data:')) return null;
       const q = url.split('?')[1] || '';
       const p = new URLSearchParams(q);
       const c = p.get('color');
       return c ? decodeURIComponent(c) : '';
-    } catch { return ''; }
+    } catch { return null; }
   }
   watch(selectedObject, (so) => {
     if (!so || typeof so.imgUrl !== 'string') return;
-    textColor.value = parseColorParam(so.imgUrl || '');
+    const color = parseColorParam(so.imgUrl || '');
+    if (color !== null) {
+      textColor.value = color;
+    }
   });
 
   type ShapeMeta = {
@@ -996,7 +1065,6 @@
     const W = m.width || 512;
     const H = m.height || 512;
     const scale = W / 100;
-
     const insetU = m.style === 'outline' ? (m.strokeWidth / 2) / scale : 0;
 
     const common =
@@ -1005,14 +1073,15 @@
         : `fill="none" stroke="${escXml(m.stroke)}" stroke-width="${m.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"`;
 
     let inner = '';
-    let useUnitViewBox = false; // <— NEW
+    let useUnitViewBox = false;
 
     switch (m.shapeType) {
       case 'rect': {
-        const x = insetU, y = insetU;
-        const w = 100 - insetU * 2, h = 100 - insetU * 2;
+        const x = insetU;
+        const y = insetU;
+        const w = 100 - insetU * 2;
+        const h = 100 - insetU * 2;
         const rx = Math.max(0, m.cornerRadius ?? 0);
-        // keep using scaled coords
         inner = `<rect x="${(x * scale).toFixed(2)}" y="${(y * scale).toFixed(2)}" width="${(w * scale).toFixed(2)}" height="${(h * scale).toFixed(2)}" rx="${(rx * scale).toFixed(2)}" ry="${(rx * scale).toFixed(2)}" ${common} />`;
         break;
       }
@@ -1022,7 +1091,8 @@
         break;
       }
       case 'ellipse': {
-        const rx = 50 - insetU, ry = 40 - insetU;
+        const rx = 50 - insetU;
+        const ry = 40 - insetU;
         inner = `<ellipse cx="${(50 * scale).toFixed(2)}" cy="${(50 * scale).toFixed(2)}" rx="${(rx * scale).toFixed(2)}" ry="${(ry * scale).toFixed(2)}" ${common} />`;
         break;
       }
@@ -1039,14 +1109,21 @@
         break;
       }
       case 'star': {
-        const R = 50 - insetU, r = R * 0.45;
+        const R = 50 - insetU;
+        const r = R * 0.45;
         const pts = starPoints(m.points || 5, R, r, 50, 50);
         inner = `<polygon points="${escXml(scaleNumbers(pts, scale))}" ${common} />`;
         break;
       }
       case 'arrow': {
-        const k = (m.key || '').toLowerCase();
-        const dir: ArrowDir = k.includes('left') ? 'left' : k.includes('up') ? 'up' : k.includes('down') ? 'down' : 'right';
+        const key = (m.key || '').toLowerCase();
+        const dir: ArrowDir = key.includes('left')
+          ? 'left'
+          : key.includes('up')
+            ? 'up'
+            : key.includes('down')
+              ? 'down'
+              : 'right';
         const pts = arrowPoints(dir, insetU);
         inner = `<polygon points="${escXml(scaleNumbers(pts, scale))}" ${common} />`;
         break;
@@ -1054,10 +1131,9 @@
       case 'heart':
       case 'line':
       case 'path': {
-        // 🔧 IMPORTANT: do NOT scale arc flags in paths — keep 0..100 coordinates
         const d = m.previewPath || 'M20 50 H80';
         inner = `<path d="${escXml(d)}" ${common} />`;
-        useUnitViewBox = true; // <— NEW: draw in 0..100 space
+        useUnitViewBox = true;
         break;
       }
       default: {
@@ -1068,7 +1144,129 @@
     }
 
     const vb = useUnitViewBox ? `0 0 100 100` : `0 0 ${W} ${H}`;
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" width="${W}" height="${H}">${inner}</svg>`;
+    const rawSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" width="${W}" height="${H}">${inner}</svg>`;
+    return trimSvgWhitespace(rawSvg, {
+      useUnitViewBox,
+      baseWidth: W,
+      baseHeight: H,
+    });
+  }
+
+  function trimSvgWhitespace(
+    svgMarkup: string,
+    options?: { useUnitViewBox?: boolean; baseWidth?: number; baseHeight?: number },
+  ): string {
+    if (typeof document === 'undefined' || typeof DOMParser === 'undefined' || !document.body) {
+      return svgMarkup;
+    }
+
+    const parseLength = (raw: string | null): number | null => {
+      if (!raw) return null;
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      const match = trimmed.match(/^(-?\d+(?:\.\d+)?)(?:px)?$/i);
+      if (!match) return null;
+      const num = Number.parseFloat(match[1]);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    try {
+      const parser = new DOMParser();
+      const parsed = parser.parseFromString(svgMarkup, 'image/svg+xml');
+      const svgEl = parsed.documentElement;
+      if (!svgEl || svgEl.nodeName.toLowerCase() !== 'svg') {
+        return svgMarkup;
+      }
+
+      const originalViewBoxAttr = svgEl.getAttribute('viewBox');
+      let originalViewBoxWidth: number | null = null;
+      let originalViewBoxHeight: number | null = null;
+      if (originalViewBoxAttr) {
+        const parts = originalViewBoxAttr.trim().split(/\s+/).map(Number);
+        if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+          originalViewBoxWidth = parts[2];
+          originalViewBoxHeight = parts[3];
+        }
+      }
+
+      const originalWidth = parseLength(svgEl.getAttribute('width'));
+      const originalHeight = parseLength(svgEl.getAttribute('height'));
+
+      const imported = document.importNode(svgEl, true) as SVGSVGElement;
+      imported.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      imported.style.position = 'absolute';
+      imported.style.visibility = 'hidden';
+      imported.style.pointerEvents = 'none';
+      imported.style.width = '0';
+      imported.style.height = '0';
+      document.body.appendChild(imported);
+
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+
+      try {
+        const graphics = Array.from(imported.querySelectorAll('*')) as SVGGraphicsElement[];
+        for (const node of graphics) {
+          if (typeof node.getBBox !== 'function') continue;
+          try {
+            const { x, y, width, height } = node.getBBox();
+            if (!Number.isFinite(width) || !Number.isFinite(height)) continue;
+            if (width === 0 && height === 0) continue;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x + width);
+            maxY = Math.max(maxY, y + height);
+          } catch {
+            // ignore nodes without a computable bounding box
+          }
+        }
+      } finally {
+        imported.remove();
+      }
+
+      if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+        return svgMarkup;
+      }
+
+      const left = Math.floor(minX);
+      const top = Math.floor(minY);
+      const right = Math.ceil(maxX);
+      const bottom = Math.ceil(maxY);
+      const widthUnits = Math.max(1, right - left);
+      const heightUnits = Math.max(1, bottom - top);
+
+      svgEl.setAttribute('viewBox', `${left} ${top} ${widthUnits} ${heightUnits}`);
+      svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+
+      const useUnitViewBox = options?.useUnitViewBox ?? false;
+
+      const targetWidth = options && Number.isFinite(options.baseWidth)
+        ? Number(options.baseWidth)
+        : (originalWidth ?? originalViewBoxWidth ?? widthUnits);
+      const targetHeight = options && Number.isFinite(options.baseHeight)
+        ? Number(options.baseHeight)
+        : (originalHeight ?? originalViewBoxHeight ?? heightUnits);
+
+      const widthScale = useUnitViewBox
+        ? (targetWidth / 100)
+        : (targetWidth / Math.max(widthUnits, 1));
+      const heightScale = useUnitViewBox
+        ? (targetHeight / 100)
+        : (targetHeight / Math.max(heightUnits, 1));
+
+      const widthPx = Math.max(1, Math.round(widthUnits * widthScale));
+      const heightPx = Math.max(1, Math.round(heightUnits * heightScale));
+
+      svgEl.setAttribute('width', `${widthPx}`);
+      svgEl.setAttribute('height', `${heightPx}`);
+
+      const serializer = new XMLSerializer();
+      return serializer.serializeToString(svgEl);
+    } catch {
+      return svgMarkup;
+    }
   }
 
   /* ---------- Search (debounced) ---------- */
@@ -1161,7 +1359,6 @@
   const selectedShapeInfo = computed(() => {
     const so = selectedObject.value as any;
     const info = parseShapeFromAny(so);
-    console.log(info)
     return info.key ? info : null;
   });
 
@@ -1177,6 +1374,13 @@
   const selectionKind = computed(() => {
     const so = selectedObject.value as any;
     if (!so || so.type !== 'image') return { isIcon: false, isShape: false, isImage: false };
+
+    if (so.elementType === 'icon') {
+      return { isIcon: true, isShape: false, isImage: false };
+    }
+    if (so.elementType === 'shape') {
+      return { isIcon: false, isShape: true, isImage: false };
+    }
 
     const url = getImgUrl(so);
 
@@ -1246,9 +1450,10 @@
     };
 
     so.shapeMeta = meta;
-    if (typeof so.name !== 'string' || !so.name.startsWith('shape:')) {
-      try { so.name = `shape:${key}`; } catch { }
-    }
+    so.elementType = 'shape';
+    so.elementVariant = key;
+    const label = SHAPES.find(s => s.key === key)?.label ?? key;
+    so.name = label;
 
     return meta;
   }
@@ -1348,7 +1553,11 @@
     const so = selectedObject.value as any;
     if (!isShapeImageSelected.value || !so) return;
 
-    const baseKey = typeof so.name === 'string' && so.name.startsWith('shape:') ? so.name.slice(6) : (so.shapeMeta?.key || 'rect');
+    const baseKey = typeof so.elementVariant === 'string' && so.elementVariant.length
+      ? so.elementVariant
+      : (typeof so.name === 'string' && so.name.startsWith('shape:'))
+        ? so.name.slice(6)
+        : (so.shapeMeta?.key || 'rect');
     const inferredType = SHAPES.find(s => s.key === baseKey)?.type as ShapeType | undefined;
     const meta: ShapeMeta = {
       key: baseKey,
@@ -1370,6 +1579,10 @@
     const url = svgDataUrlWithId(svg, meta.key);
 
     so.shapeMeta = meta;
+    so.elementType = 'shape';
+    so.elementVariant = meta.key;
+    const friendlyLabel = SHAPES.find(s => s.key === meta.key)?.label ?? meta.key;
+    so.name = friendlyLabel;
     so.imgUrl = url;
     so.isVector = true;
 
@@ -1384,7 +1597,6 @@
       img.src = url;
       so.img = img;
     }
-    try { so.name = `shape:${meta.key}`; } catch { }
   }
   watch([selectedShapeStyle, shapeFill, shapeStroke, shapeStrokeWidth, shapeCornerRadius, shapePoints, shapeSides], applyToSelectedShapeImage);
 
@@ -1427,7 +1639,9 @@
     emit('uploadObject', 'image', {
       imgUrl: url,
       isVector: true,
-      name: `shape:${s.key}`,
+      elementType: 'shape',
+      elementVariant: s.key,
+      name: s.label,
       shapeMeta: meta,
     });
   }
@@ -1465,7 +1679,17 @@
   function onFileChange(e: Event) {
     const files = (e.target as HTMLInputElement).files;
     if (files?.length && validateFile(files[0])) {
-      emit('uploadObject', 'image', { imgUrl: URL.createObjectURL(files[0]) });
+      const file = files[0];
+      const isSvg = file.type === 'image/svg+xml';
+      const variant = isSvg ? 'svg' : 'bitmap';
+      const displayName = file.name ? file.name.replace(/\.[^/.]+$/, '') : 'Image';
+      emit('uploadObject', 'image', {
+        imgUrl: URL.createObjectURL(file),
+        elementType: 'image',
+        elementVariant: variant,
+        name: displayName,
+        isVector: isSvg,
+      });
     } else {
       alert(`File must be one of: ${allowedTypes.join(', ')} and under ${maxFileSizeMB}MB`);
     }
@@ -1483,7 +1707,17 @@
     isDragging.value = false;
     const files = event.dataTransfer?.files;
     if (files?.length && validateFile(files[0])) {
-      emit('uploadObject', 'image', { imgUrl: URL.createObjectURL(files[0]) });
+      const file = files[0];
+      const isSvg = file.type === 'image/svg+xml';
+      const variant = isSvg ? 'svg' : 'bitmap';
+      const displayName = file.name ? file.name.replace(/\.[^/.]+$/, '') : 'Image';
+      emit('uploadObject', 'image', {
+        imgUrl: URL.createObjectURL(file),
+        elementType: 'image',
+        elementVariant: variant,
+        name: displayName,
+        isVector: isSvg,
+      });
     } else {
       alert(`File must be one of: ${allowedTypes.join(', ')} and under ${maxFileSizeMB}MB`);
     }

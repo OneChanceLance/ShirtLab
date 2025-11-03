@@ -61,6 +61,14 @@ export const useCheckoutStore = defineStore('checkout', {
       Front: null,
       Back: null,
     } as Record<DesignView, string | null>,
+    canvasPreviews: {
+      Front: null,
+      Back: null,
+    } as Record<DesignView, string | null>,
+    blankDesignPreviews: {
+      Front: null,
+      Back: null,
+    } as Record<DesignView, string | null>,
     activeDesignView: 'Front' as DesignView,
     customer: {
       fullName: '',
@@ -164,6 +172,7 @@ export const useCheckoutStore = defineStore('checkout', {
       this.quantity = 1;
       this.sizeMeasurements = [];
       this.resetDesignPreviews();
+      this.resetBlankDesignPreviews();
       this.resetCustomer();
       this.editingCartItemId = null;
       this.designState = null;
@@ -176,6 +185,22 @@ export const useCheckoutStore = defineStore('checkout', {
       this.designPreviews.Front = null;
       this.designPreviews.Back = null;
       this.activeDesignView = 'Front';
+      this.resetBlankDesignPreviews();
+      this.resetCanvasPreviews();
+    },
+    setBlankDesignPreview(view: DesignView, preview: string | null) {
+      this.blankDesignPreviews[view] = typeof preview === 'string' && preview.trim() ? preview : null;
+    },
+    resetBlankDesignPreviews() {
+      this.blankDesignPreviews.Front = null;
+      this.blankDesignPreviews.Back = null;
+    },
+    setCanvasPreview(view: DesignView, preview: string | null) {
+      this.canvasPreviews[view] = typeof preview === 'string' && preview.trim() ? preview : null;
+    },
+    resetCanvasPreviews() {
+      this.canvasPreviews.Front = null;
+      this.canvasPreviews.Back = null;
     },
     setActiveDesignView(view: DesignView) {
       this.activeDesignView = view;
@@ -192,6 +217,7 @@ export const useCheckoutStore = defineStore('checkout', {
       this.quantity = safeQuantity;
       this.sizeMeasurements = item.measurement ? [item.measurement] : [];
       this.resetDesignPreviews();
+      this.resetBlankDesignPreviews();
       const normalizePreview = (value: string | null | undefined) =>
         (typeof value === 'string' && value.trim().length ? value : null);
       const storedPreviews = item.designPreviews ?? { Front: null, Back: null };
@@ -202,6 +228,24 @@ export const useCheckoutStore = defineStore('checkout', {
       }
       if (backPreview) {
         this.setDesignPreview('Back', backPreview);
+      }
+      const blankPreviews = (item as any)?.blankPreviews ?? { Front: null, Back: null };
+      const frontBlank = normalizePreview(blankPreviews?.Front);
+      const backBlank = normalizePreview(blankPreviews?.Back);
+      if (frontBlank) {
+        this.setBlankDesignPreview('Front', frontBlank);
+      }
+      if (backBlank) {
+        this.setBlankDesignPreview('Back', backBlank);
+      }
+      const canvasPreviews = (item as any)?.canvasPreviews ?? { Front: null, Back: null };
+      const frontCanvas = normalizePreview(canvasPreviews?.Front);
+      const backCanvas = normalizePreview(canvasPreviews?.Back);
+      if (frontCanvas) {
+        this.setCanvasPreview('Front', frontCanvas);
+      }
+      if (backCanvas) {
+        this.setCanvasPreview('Back', backCanvas);
       }
       this.ensureMinimumQuantity();
       const baselineDesign = item.designState ? cloneValue(item.designState) : null;

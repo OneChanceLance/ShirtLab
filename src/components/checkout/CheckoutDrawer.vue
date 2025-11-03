@@ -164,6 +164,9 @@
                                 <small v-if="designChargeMeta(charge)">
                                   {{ designChargeMeta(charge) }}
                                 </small>
+                                <small v-if="designChargeItemsSummary(charge)">
+                                  {{ designChargeItemsSummary(charge) }}
+                                </small>
                               </span>
                               <strong>{{ formatCurrency(charge.charge, detail.currency ?? cartStore.firstCurrency ??
                                 'USD') }}</strong>
@@ -335,8 +338,10 @@
   const STRIPE_PUBLISHABLE_KEY = (import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string | undefined)?.trim();
   const ORDER_PREVIEWS_BUCKET = (import.meta.env.VITE_SUPABASE_ORDER_PREVIEWS_BUCKET as string | undefined)?.trim() || 'order-previews';
   const ORDER_DESIGNS_BUCKET = (import.meta.env.VITE_SUPABASE_ORDER_DESIGNS_BUCKET as string | undefined)?.trim() || 'order-design-assets';
+  const BYPASS_PAYMENTS = String((import.meta.env.VITE_CHECKOUT_BYPASS_PAYMENTS as string | undefined) ?? '')
+    .toLowerCase() === 'true';
 
-  const stripeConfigured = computed(() => Boolean(STRIPE_PUBLISHABLE_KEY));
+  const stripeConfigured = computed(() => Boolean(STRIPE_PUBLISHABLE_KEY) || BYPASS_PAYMENTS);
 
   const stripeInstance = ref<StripeInstance | null>(null);
   const stripeElements = ref<StripeElements | null>(null);
@@ -456,10 +461,20 @@
 
   function designChargeLabel(charge: any): string {
     const view = charge?.view ?? 'View';
-    const type = charge?.elementType === 'text' ? 'Text' : 'Graphic';
+    if (charge?.elementType === 'composite') {
+      const tier = charge?.category === 'full' ? 'Full coverage' : 'Partial coverage';
+      return `${view} design area (${tier})`;
+    }
+    const typeMap: Record<string, string> = {
+      text: 'Text',
+      image: 'Graphic',
+      icon: 'Icon',
+      shape: 'Shape',
+    };
+    const elementLabel = typeMap[charge?.elementType] ?? 'Design';
     const index = typeof charge?.elementIndex === 'number' ? ` #${charge.elementIndex + 1}` : '';
-    const category = charge?.category === 'full' ? 'Full coverage' : 'Left/partial';
-    return `${view} ${type}${index} (${category})`;
+    const category = charge?.category === 'full' ? 'Full coverage' : 'Partial coverage';
+    return `${view} ${elementLabel}${index} (${category})`;
   }
 
   function designChargeMeta(charge: any): string | null {
@@ -467,10 +482,40 @@
     if (typeof charge?.widthInches === 'number' && typeof charge?.heightInches === 'number') {
       parts.push(`${charge.widthInches.toFixed(1)}″ × ${charge.heightInches.toFixed(1)}″`);
     }
+    if (typeof charge?.areaSquareInches === 'number') {
+      parts.push(`${charge.areaSquareInches.toFixed(1)} sq in`);
+    }
     if (typeof charge?.coverageRatio === 'number') {
       parts.push(`${Math.round(charge.coverageRatio * 100)}% of grid`);
     }
     return parts.length ? parts.join(' · ') : null;
+  }
+
+  function designChargeItemsSummary(charge: any): string | null {
+    if (!Array.isArray(charge?.items) || !charge.items.length) {
+      return null;
+    }
+    const descriptors = charge.items.map((item: any) => {
+      const typeLabelRaw = (item?.elementType ?? item?.type ?? 'design') as string;
+      const typeLabel = typeLabelRaw ? `${typeLabelRaw.charAt(0).toUpperCase()}${typeLabelRaw.slice(1)}` : 'Design';
+      const variantRaw = item?.elementVariant ?? '';
+      const variant =
+        typeof variantRaw === 'string' && variantRaw.includes(':')
+          ? variantRaw.split(':').pop()
+          : variantRaw;
+      const label = item?.name && typeof item.name === 'string' && item.name.trim().length
+        ? item.name.trim()
+        : variant || typeLabel;
+      const width = typeof item?.widthInches === 'number' ? item.widthInches : null;
+      const height = typeof item?.heightInches === 'number' ? item.heightInches : null;
+      const size = width !== null && height !== null
+        ? `${width.toFixed(1)}″×${height.toFixed(1)}″`
+        : null;
+      const base = `${typeLabel} · ${label}`;
+      return size ? `${base} (${size})` : base;
+    });
+    const count = charge.items.length;
+    return `${count} item${count === 1 ? '' : 's'} — ${descriptors.join(', ')}`;
   }
 
   async function loadStripeScript(): Promise<void> {
@@ -742,6 +787,8 @@
       minimumQuantity: CartItem['minimumQuantity'];
       front_design_url: string | null;
       back_design_url: string | null;
+      front_blank_url: string | null;
+      back_blank_url: string | null;
     }> = [];
 
     const designAssets: DesignAssetRecord[] = [];
@@ -765,27 +812,57 @@
       const orderItemId = resolveOrderItemId(item);
       const itemSlug = sanitizePathSegment(item?.id ?? `item-${index + 1}`, `item-${index + 1}`);
       const previewSources = resolvePreviewSources(item);
+      const printSources = resolvePrintPreviewSources(item);
+      const blankSources = resolveBlankPreviewSources(item);
       let frontDesignUrl: string | null = null;
       let backDesignUrl: string | null = null;
+      let frontBlankUrl: string | null = null;
+      let backBlankUrl: string | null = null;
 
-      if (isUploadableSource(previewSources.Front)) {
+      const frontSource = printSources.Front ?? previewSources.Front;
+      if (frontSource && isUploadableSource(frontSource)) {
         const uploadedFront = await uploadImageSource(
-          previewSources.Front,
+          frontSource,
           ORDER_PREVIEWS_BUCKET,
           ['orders', orderToken, itemSlug, 'front'],
           'front',
         );
-        frontDesignUrl = uploadedFront ?? previewSources.Front;
+        frontDesignUrl = uploadedFront ?? frontSource;
+      } else {
+        frontDesignUrl = frontSource ?? null;
       }
 
-      if (isUploadableSource(previewSources.Back)) {
+      const backSource = printSources.Back ?? previewSources.Back;
+      if (backSource && isUploadableSource(backSource)) {
         const uploadedBack = await uploadImageSource(
-          previewSources.Back,
+          backSource,
           ORDER_PREVIEWS_BUCKET,
           ['orders', orderToken, itemSlug, 'back'],
           'back',
         );
-        backDesignUrl = uploadedBack ?? previewSources.Back;
+        backDesignUrl = uploadedBack ?? backSource;
+      } else {
+        backDesignUrl = backSource ?? null;
+      }
+
+      if (isUploadableSource(blankSources.Front)) {
+        const uploadedFrontBlank = await uploadImageSource(
+          blankSources.Front,
+          ORDER_PREVIEWS_BUCKET,
+          ['orders', orderToken, itemSlug, 'front-blank'],
+          'front-blank',
+        );
+        frontBlankUrl = uploadedFrontBlank ?? blankSources.Front;
+      }
+
+      if (isUploadableSource(blankSources.Back)) {
+        const uploadedBackBlank = await uploadImageSource(
+          blankSources.Back,
+          ORDER_PREVIEWS_BUCKET,
+          ['orders', orderToken, itemSlug, 'back-blank'],
+          'back-blank',
+        );
+        backBlankUrl = uploadedBackBlank ?? blankSources.Back;
       }
 
       orderItemsPayload.push({
@@ -797,6 +874,8 @@
         minimumQuantity: item.minimumQuantity,
         front_design_url: frontDesignUrl,
         back_design_url: backDesignUrl,
+        front_blank_url: frontBlankUrl,
+        back_blank_url: backBlankUrl,
       });
 
       const uploadedSources = collectDesignImageSources(item.designState);
@@ -1048,6 +1127,29 @@
     };
   }
 
+  function resolveBlankPreviewSources(item: CartItem | null): Record<PreviewView, string | null> {
+    if (!item) {
+      return { Front: null, Back: null };
+    }
+    const blanks = item.blankPreviews ?? { Front: null, Back: null };
+    return {
+      Front: normalizePreview(blanks.Front),
+      Back: normalizePreview(blanks.Back),
+    };
+  }
+
+  function resolvePrintPreviewSources(item: CartItem | null): Record<PreviewView, string | null> {
+    if (!item) {
+      return { Front: null, Back: null };
+    }
+    const canvases = item.canvasPreviews ?? { Front: null, Back: null };
+    const designs = item.designPreviews ?? { Front: null, Back: null };
+    return {
+      Front: normalizePreview(canvases.Front) ?? normalizePreview(designs.Front) ?? null,
+      Back: normalizePreview(canvases.Back) ?? normalizePreview(designs.Back) ?? null,
+    };
+  }
+
   const previewSources = computed(() => resolvePreviewSources(activeCartItem.value));
   const previewAvailability = computed<Record<PreviewView, boolean>>(() => ({
     Front: Boolean(previewSources.value.Front),
@@ -1238,12 +1340,22 @@
           },
           successUrl: successUrl.toString(),
           cancelUrl: cancelUrl.toString(),
+          bypass: BYPASS_PAYMENTS,
         }),
       });
 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data?.error ?? 'Unable to start payment. Please try again.');
+      }
+      if (data?.bypassed) {
+        currentStep.value = 3;
+        requestStatus.value = 'success';
+        paymentIntentClientSecret.value = null;
+        paymentError.value = null;
+        paymentProcessing.value = false;
+        await recordOrderIfNeeded();
+        return;
       }
       if (!data?.clientSecret) {
         throw new Error('Payment could not be initialised. Missing client secret.');
