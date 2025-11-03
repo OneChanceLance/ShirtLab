@@ -952,21 +952,18 @@
   watch(textColor, () => { void applySelectedIconColor(); });
 
   // optional: when selection changes, try to sync textColor from URL (?color=...)
-  function parseColorParam(url: string): string | null {
+  function parseColorParam(url: string): string {
     try {
-      if (!url || url.startsWith('data:')) return null;
+      if (!url || url.startsWith('data:')) return '';
       const q = url.split('?')[1] || '';
       const p = new URLSearchParams(q);
       const c = p.get('color');
       return c ? decodeURIComponent(c) : '';
-    } catch { return null; }
+    } catch { return ''; }
   }
   watch(selectedObject, (so) => {
     if (!so || typeof so.imgUrl !== 'string') return;
-    const color = parseColorParam(so.imgUrl || '');
-    if (color !== null) {
-      textColor.value = color;
-    }
+    textColor.value = parseColorParam(so.imgUrl || '');
   });
 
   type ShapeMeta = {
@@ -1192,7 +1189,7 @@
       const originalWidth = parseLength(svgEl.getAttribute('width'));
       const originalHeight = parseLength(svgEl.getAttribute('height'));
 
-      const imported = document.importNode(svgEl, true) as SVGSVGElement;
+      const imported = document.importNode(svgEl, true) as unknown as SVGSVGElement;
       imported.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
       imported.style.position = 'absolute';
       imported.style.visibility = 'hidden';
@@ -1242,11 +1239,14 @@
 
       const useUnitViewBox = options?.useUnitViewBox ?? false;
 
-      const targetWidth = options && Number.isFinite(options.baseWidth)
-        ? Number(options.baseWidth)
+      const hasBaseWidth = options && typeof options.baseWidth === 'number' && Number.isFinite(options.baseWidth);
+      const hasBaseHeight = options && typeof options.baseHeight === 'number' && Number.isFinite(options.baseHeight);
+
+      const targetWidth = hasBaseWidth
+        ? options!.baseWidth as number
         : (originalWidth ?? originalViewBoxWidth ?? widthUnits);
-      const targetHeight = options && Number.isFinite(options.baseHeight)
-        ? Number(options.baseHeight)
+      const targetHeight = hasBaseHeight
+        ? options!.baseHeight as number
         : (originalHeight ?? originalViewBoxHeight ?? heightUnits);
 
       const widthScale = useUnitViewBox

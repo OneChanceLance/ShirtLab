@@ -224,13 +224,6 @@
     Front: { items: [], summary: createEmptySummary('Front') },
     Back: { items: [], summary: createEmptySummary('Back') },
   });
-  const inspectorOpen = ref(true);
-
-  const activeInspector = computed(() => inspectorState[selectedView.value]);
-  const inspectorItems = computed(() => activeInspector.value?.items ?? []);
-  const inspectorSummary = computed(() => activeInspector.value?.summary ?? createEmptySummary(selectedView.value));
-  const selectedInspectorId = computed(() => selectedObject.value?.id ?? null);
-
 
   // at top-level (script setup)
   let onWinMove: ((e: MouseEvent) => void) | null = null;
@@ -2570,64 +2563,6 @@
       if (Number.isFinite(parsed)) return parsed;
     }
     return null;
-  }
-
-  function formatInches(value: number | null | undefined, decimals = 1): string {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-    return `${value.toFixed(decimals)}″`;
-  }
-
-  function formatArea(value: number | null | undefined): string {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-    return `${value.toFixed(1)} sq in`;
-  }
-
-  function formatPercent(value: number | null | undefined): string {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-    return `${(value * 100).toFixed(1)}%`;
-  }
-
-  function inspectorItemLabel(item: InspectorItem): string {
-    const typeLabel = item.elementType
-      ? `${item.elementType.charAt(0).toUpperCase()}${item.elementType.slice(1)}`
-      : `${item.type.charAt(0).toUpperCase()}${item.type.slice(1)}`;
-    const variantRaw = item.elementVariant ?? '';
-    const variant =
-      typeof variantRaw === 'string' && variantRaw.includes(':')
-        ? variantRaw.split(':').pop()
-        : variantRaw;
-    const baseName = item.name && item.name.trim().length ? item.name.trim() : variant || typeLabel;
-    return variant && variant !== baseName ? `${typeLabel} · ${baseName}` : `${typeLabel} · ${baseName}`;
-  }
-
-  function inspectorItemMeta(item: InspectorItem): string {
-    const parts: string[] = [];
-    if (typeof item.widthInches === 'number' && typeof item.heightInches === 'number') {
-      parts.push(`${item.widthInches.toFixed(1)}″×${item.heightInches.toFixed(1)}″`);
-    }
-    if (typeof item.areaSquareInches === 'number') {
-      parts.push(`${item.areaSquareInches.toFixed(1)} sq in`);
-    }
-    if (typeof item.rotation === 'number' && Math.abs(item.rotation) > 0.01) {
-      parts.push(`${item.rotation.toFixed(0)}°`);
-    }
-    parts.push(`z${item.z}`);
-    return parts.join(' · ');
-  }
-
-  function toggleInspector() {
-    inspectorOpen.value = !inspectorOpen.value;
-  }
-
-  function handleInspectorSelect(id: string) {
-    const targetImage = images.find((img) => img.id === id);
-    const targetText = texts.find((txt) => txt.id === id);
-    const target = targetImage ?? targetText ?? null;
-    if (!target) return;
-    deselectAll();
-    target.isSelected = true;
-    selectedObject.value = target as any;
-    draw();
   }
 
   // Unified object upload (image/text) with correct type signatures
