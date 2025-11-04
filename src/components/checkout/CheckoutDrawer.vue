@@ -298,6 +298,7 @@
   import { calculatePricing } from '../../utils/pricing';
   import { supabase } from '../../supabase';
   import type { DesignViewName, SerializedDesignState } from '../../types/designState';
+  import { isCachedAssetRef, getCachedBlob, resolveCachedRefFromObjectUrl } from '../../utils/designCache';
 
   type StripeConfirmResult = {
     error?: { message?: string } | null;
@@ -613,50 +614,166 @@
     }
 
     try {
+      const safeSegments = pathSegments.map((segment, index) =>
+        sanitizePathSegment(segment, index === pathSegments.length - 1 ? fallbackName : `segment-${index + 1}`));
+
+      const uploadBlob = async (blob: Blob, contentTypeHint: string | null | undefined): Promise<string | null> => {
+        const contentType = contentTypeHint || blob.type || 'image/png';
+        const extension = inferFileExtension(contentType);
+        const path = `${safeSegments.join('/')}.${extension}`;
+        const storageBucket = supabase.storage.from(trimmedBucket);
+        const { error } = await storageBucket.upload(path, blob, {
+          contentType,
+          upsert: true,
+          cacheControl: '3600',
+        });
+        if (error) {
+          throw error;
+        }
+        const { data } = storageBucket.getPublicUrl(path);
+        const publicUrl = data?.publicUrl ?? null;
+        if (publicUrl) {
+          storageUploadCache.set(cacheKey, publicUrl);
+        }
+        return publicUrl;
+      };
+
+      if (isCachedAssetRef(trimmedSource)) {
+        const cachedBlob = await getCachedBlob(trimmedSource);
+        if (!cachedBlob) {
+          throw new Error('Cached asset could not be read');
+        }
+        return await uploadBlob(cachedBlob, cachedBlob.type);
+      }
+
+      if (trimmedSource.startsWith('blob:')) {
+        const cachedRef = resolveCachedRefFromObjectUrl(trimmedSource);
+        if (cachedRef && isCachedAssetRef(cachedRef)) {
+          const cachedBlob = await getCachedBlob(cachedRef);
+          if (cachedBlob) {
+            return await uploadBlob(cachedBlob, cachedBlob.type);
+          }
+        }
+      }
+
+      if (trimmedSource.startsWith('data:')) {
+        const blob = dataUrlToBlob(trimmedSource);
+        return await uploadBlob(blob, blob.type);
+      }
+
       const response = await fetch(trimmedSource);
       if (!response.ok) {
         throw new Error(`Fetch failed with status ${response.status}`);
       }
       const blob = await response.blob();
       const contentType = response.headers.get('content-type') || blob.type || 'image/png';
-      const extension = inferFileExtension(contentType);
-      const safeSegments = pathSegments.map((segment, index) =>
-        sanitizePathSegment(segment, index === pathSegments.length - 1 ? fallbackName : `segment-${index + 1}`));
-      const path = `${safeSegments.join('/')}.${extension}`;
-      const storageBucket = supabase.storage.from(trimmedBucket);
-      const { error } = await storageBucket.upload(path, blob, {
-        contentType,
-        upsert: true,
-        cacheControl: '3600',
-      });
-      if (error) {
-        throw error;
-      }
-      const { data } = storageBucket.getPublicUrl(path);
-      const publicUrl = data?.publicUrl ?? null;
-      if (publicUrl) {
-        storageUploadCache.set(cacheKey, publicUrl);
-      }
-      return publicUrl;
+      return await uploadBlob(blob, contentType);
     } catch (error) {
-      console.error('[Checkout] Failed to upload image to storage', error);
+      const traceContext = {
+        bucket: trimmedBucket,
+        source: trimmedSource.slice(0, 120),
+        pathSegments,
+        fallbackName,
+      };
+      console.error('[Checkout] Failed to upload image to storage', traceContext, error);
       return null;
     }
   }
 
-  function collectDesignImageSources(designState: SerializedDesignState | null): string[] {
+  function dataUrlToBlob(dataUrl: string): Blob {
+    const [header, base64] = dataUrl.split(',');
+    if (!header || !base64) {
+      throw new Error('Invalid data URL');
+    }
+    const mimeMatch = header.match(/data:(.*?)(;base64)?$/);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+    const binary = typeof atob === 'function' ? atob(base64) : Buffer.from(base64, 'base64').toString('binary');
+    const length = binary.length;
+    const buffer = new Uint8Array(length);
+    for (let i = 0; i < length; i += 1) {
+      buffer[i] = binary.charCodeAt(i);
+    }
+    return new Blob([buffer], { type: mime });
+  }
+
+  type CollectedImageSource = {
+    raw: string;
+    original: string | null;
+    cacheRef: string | null;
+    uploadSource: string;
+  };
+
+  function collectDesignImageSources(designState: SerializedDesignState | null): CollectedImageSource[] {
     if (!designState || !designState.views) return [];
-    const collected = new Set<string>();
+    const collected = new Map<string, CollectedImageSource>();
     for (const view of Object.values(designState.views)) {
       if (!view || !Array.isArray(view.images)) continue;
       for (const image of view.images) {
-        const src = typeof image?.imgUrl === 'string' ? image.imgUrl.trim() : '';
-        if (src) {
-          collected.add(src);
+        const raw = typeof image?.imgUrl === 'string' ? image.imgUrl.trim() : '';
+        const original = typeof image?.originalSource === 'string' ? image.originalSource.trim() : '';
+        const cacheRef = typeof image?.assetCacheRef === 'string' ? image.assetCacheRef.trim() : '';
+        const preferred = cacheRef || original || raw;
+        if (!preferred) continue;
+        const key = cacheRef || original || raw;
+        if (!collected.has(key)) {
+          collected.set(key, {
+            raw,
+            original: original || null,
+            cacheRef: cacheRef || null,
+            uploadSource: cacheRef || original || raw,
+          });
         }
       }
     }
-    return Array.from(collected);
+    return Array.from(collected.values());
+  }
+
+  function createDesignPayloadSnapshot(): Array<{
+    cartItemId: string;
+    assets: Array<{ original: string; url: string; bucket: string | null; stored: boolean }> | null;
+    elements: Array<Record<string, any>> | null;
+  }> {
+    const rawItemsSnapshot = cloneSerializable<CartItem[]>(cartItems.value);
+    if (!rawItemsSnapshot.length) return [];
+    type SnapshotAsset = { original: string; url: string; bucket: string | null; stored: boolean };
+    type SnapshotEntry = {
+      cartItemId: string;
+      assets: SnapshotAsset[] | null;
+      elements: Array<Record<string, any>> | null;
+    };
+    return rawItemsSnapshot
+      .map((item) => {
+        const designSources = collectDesignImageSources(item.designState ?? null);
+        const assets: SnapshotAsset[] = designSources.map((source) => ({
+          original: source.raw || source.uploadSource,
+          url: source.uploadSource,
+          bucket: null,
+          stored: Boolean(source.cacheRef),
+        }));
+        const elementEntries = buildDesignElements(item.designState ?? null, new Map<string, string>());
+        if (!assets.length && !elementEntries.length) {
+          return null;
+        }
+        return {
+          cartItemId: item.id,
+          assets: assets.length ? assets : null,
+          elements: elementEntries.length ? elementEntries : null,
+        };
+      })
+      .filter((entry): entry is SnapshotEntry => Boolean(entry));
+  }
+
+  function logDesignPayloadSnapshot(context: string) {
+    try {
+      const snapshot = createDesignPayloadSnapshot();
+      if (!snapshot.length) {
+        console.log(`[Checkout] Design payload preview (${context})`, []);
+        return;
+      }
+      console.log(`[Checkout] Design payload preview (${context})`, snapshot);
+    } catch (error) {
+      console.warn(`[Checkout] Failed to log design payload preview (${context})`, error);
+    }
   }
 
   function buildDesignElements(
@@ -672,9 +789,21 @@
       const texts = Array.isArray(view.texts) ? view.texts : [];
 
       for (const image of images) {
-        const source = typeof image.imgUrl === 'string'
-          ? assetLookup.get(image.imgUrl) ?? image.imgUrl ?? null
-          : null;
+        const cacheRef = typeof (image as any)?.assetCacheRef === 'string' ? (image as any).assetCacheRef.trim() : '';
+        const originalSrc = typeof (image as any)?.originalSource === 'string' ? (image as any).originalSource.trim() : '';
+        const rawSrc = typeof image.imgUrl === 'string' ? image.imgUrl.trim() : '';
+        let resolvedSource: string | null = null;
+        const lookupOrder = [cacheRef, originalSrc, rawSrc].filter((key): key is string => Boolean(key));
+        for (const key of lookupOrder) {
+          const mapped = assetLookup.get(key);
+          if (mapped) {
+            resolvedSource = mapped;
+            break;
+          }
+        }
+        if (!resolvedSource) {
+          resolvedSource = rawSrc || originalSrc || cacheRef || null;
+        }
         entries.push({
           type: 'image',
           view: designView,
@@ -687,7 +816,7 @@
           zIndex: image.z,
           aspect: image.aspect,
           shapeMeta: image.shapeMeta ?? null,
-          source,
+          source: resolvedSource,
         });
       }
 
@@ -814,55 +943,76 @@
       const previewSources = resolvePreviewSources(item);
       const printSources = resolvePrintPreviewSources(item);
       const blankSources = resolveBlankPreviewSources(item);
+      const previewCacheRefs = item.designPreviewCacheRefs ?? { Front: null, Back: null };
+      const blankCacheRefs = item.blankDesignCacheRefs ?? { Front: null, Back: null };
       let frontDesignUrl: string | null = null;
       let backDesignUrl: string | null = null;
       let frontBlankUrl: string | null = null;
       let backBlankUrl: string | null = null;
 
-      const frontSource = printSources.Front ?? previewSources.Front;
-      if (frontSource && isUploadableSource(frontSource)) {
+      // Prefer live checkout previews (hi-res after generator), then per-item fallbacks
+      const liveFrontDesign = normalizePreview(checkoutStore.designPreviews?.Front);
+      const liveBackDesign = normalizePreview(checkoutStore.designPreviews?.Back);
+      const frontDesignCache = normalizePreview(previewCacheRefs.Front);
+      const backDesignCache = normalizePreview(previewCacheRefs.Back);
+      const frontDesignSource = liveFrontDesign ?? frontDesignCache ?? previewSources.Front ?? printSources.Front;
+      if (frontDesignSource && isUploadableSource(frontDesignSource)) {
         const uploadedFront = await uploadImageSource(
-          frontSource,
+          frontDesignSource,
           ORDER_PREVIEWS_BUCKET,
           ['orders', orderToken, itemSlug, 'front'],
           'front',
         );
-        frontDesignUrl = uploadedFront ?? frontSource;
+        frontDesignUrl = uploadedFront ?? frontDesignSource;
       } else {
-        frontDesignUrl = frontSource ?? null;
+        frontDesignUrl = frontDesignSource ?? null;
       }
 
-      const backSource = printSources.Back ?? previewSources.Back;
-      if (backSource && isUploadableSource(backSource)) {
+      const backDesignSource = liveBackDesign ?? backDesignCache ?? previewSources.Back ?? previewSources.Front ?? printSources.Back;
+      if (backDesignSource && isUploadableSource(backDesignSource)) {
         const uploadedBack = await uploadImageSource(
-          backSource,
+          backDesignSource,
           ORDER_PREVIEWS_BUCKET,
           ['orders', orderToken, itemSlug, 'back'],
           'back',
         );
-        backDesignUrl = uploadedBack ?? backSource;
+        backDesignUrl = uploadedBack ?? backDesignSource;
       } else {
-        backDesignUrl = backSource ?? null;
+        backDesignUrl = backDesignSource ?? null;
       }
 
-      if (isUploadableSource(blankSources.Front)) {
+      const liveFrontBlankRef = normalizePreview(checkoutStore.blankDesignCacheRefs?.Front);
+      const liveBackBlankRef = normalizePreview(checkoutStore.blankDesignCacheRefs?.Back);
+      const liveFrontBlank = normalizePreview(checkoutStore.blankDesignPreviews?.Front);
+      const liveBackBlank = normalizePreview(checkoutStore.blankDesignPreviews?.Back);
+      const frontBlankCache = normalizePreview(blankCacheRefs.Front);
+      const backBlankCache = normalizePreview(blankCacheRefs.Back);
+      // Prefer cache ref, then data URL blank, avoid printSources (can be blob: URLs)
+      // Prefer immediate data URL (available right after generation), then cache ref
+      const frontBlankSource = liveFrontBlank ?? liveFrontBlankRef ?? frontBlankCache ?? blankSources.Front;
+      if (frontBlankSource && isUploadableSource(frontBlankSource)) {
         const uploadedFrontBlank = await uploadImageSource(
-          blankSources.Front,
+          frontBlankSource,
           ORDER_PREVIEWS_BUCKET,
           ['orders', orderToken, itemSlug, 'front-blank'],
           'front-blank',
         );
-        frontBlankUrl = uploadedFrontBlank ?? blankSources.Front;
+        frontBlankUrl = uploadedFrontBlank ?? frontBlankSource;
+      } else {
+        frontBlankUrl = frontBlankSource ?? null;
       }
 
-      if (isUploadableSource(blankSources.Back)) {
+      const backBlankSource = liveBackBlank ?? liveBackBlankRef ?? backBlankCache ?? blankSources.Back;
+      if (backBlankSource && isUploadableSource(backBlankSource)) {
         const uploadedBackBlank = await uploadImageSource(
-          blankSources.Back,
+          backBlankSource,
           ORDER_PREVIEWS_BUCKET,
           ['orders', orderToken, itemSlug, 'back-blank'],
           'back-blank',
         );
-        backBlankUrl = uploadedBackBlank ?? blankSources.Back;
+        backBlankUrl = uploadedBackBlank ?? backBlankSource;
+      } else {
+        backBlankUrl = backBlankSource ?? null;
       }
 
       orderItemsPayload.push({
@@ -879,26 +1029,33 @@
       });
 
       const uploadedSources = collectDesignImageSources(item.designState);
-      for (const [sourceIndex, source] of uploadedSources.entries()) {
-        const assetName = deriveAssetName(source, sourceIndex);
+      for (const [sourceIndex, sourceInfo] of uploadedSources.entries()) {
+        const uploadSource = sourceInfo.cacheRef ?? sourceInfo.original ?? sourceInfo.raw;
+        if (!uploadSource) continue;
+        const assetKeyForName = sourceInfo.original ?? sourceInfo.raw ?? uploadSource;
+        const assetName = deriveAssetName(assetKeyForName, sourceIndex);
         const uploadedDesign = await uploadImageSource(
-          source,
+          uploadSource,
           ORDER_DESIGNS_BUCKET,
           ['orders', orderToken, itemSlug, assetName],
           assetName,
         );
-        const isDataUrl = source.startsWith('data:');
-        const finalUrl = uploadedDesign ?? (isDataUrl ? null : source);
+        const isDataUrl = uploadSource.startsWith('data:');
+        const finalUrl = uploadedDesign ?? (isDataUrl ? null : uploadSource);
         if (finalUrl) {
           const stored = Boolean(uploadedDesign);
           designAssets.push({
             cartItemId: orderItemId,
-            original: source,
+            original: sourceInfo.raw || uploadSource,
             url: finalUrl,
             bucket: stored ? (ORDER_DESIGNS_BUCKET || null) : null,
             stored,
           });
-          assetUrlLookup.set(source, finalUrl);
+          const lookupKeys = [uploadSource, sourceInfo.raw, sourceInfo.original, sourceInfo.cacheRef]
+            .filter((key): key is string => typeof key === 'string' && key.trim().length > 0);
+          for (const key of lookupKeys) {
+            assetUrlLookup.set(key, finalUrl);
+          }
         }
       }
     }
@@ -944,6 +1101,7 @@
       : null;
 
     try {
+      console.log('[Checkout] Supabase order payload', { designs: designEntries });
       const { error } = await supabase.from('orders').insert([{
         first_name: firstName,
         last_name: lastName,
@@ -1225,6 +1383,11 @@
     return `${colorLabel} · ${sizeLabel}`;
   }
 
+  watch(isOpen, (open) => {
+    if (!open) return;
+    logDesignPayloadSnapshot('drawer-opened');
+  });
+
   const fullNameField = computed({
     get: () => checkoutStore.customer.fullName,
     set: (value: string) => checkoutStore.updateCustomerField('fullName', value),
@@ -1283,6 +1446,12 @@
     submitting.value = true;
     checkoutError.value = null;
     try {
+      if (typeof window !== 'undefined') {
+        const generator = window.__shirtlabGenerateHighResPreviews;
+        if (typeof generator === 'function') {
+          await generator();
+        }
+      }
       const lineItems = pricedItems.map((item) => {
         const rawUnit = Math.round((item.unitPrice as number) * 100);
         if (!Number.isFinite(rawUnit) || rawUnit <= 0) {

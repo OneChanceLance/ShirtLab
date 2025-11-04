@@ -3,10 +3,7 @@
 
     <div class="checkout-card__summary">
       <div class="checkout-card__preview" :class="{ 'has-image': Boolean(previewImage) }">
-        <img v-if="previewImage" :src="previewImage" :alt="`Preview of ${productTitle}`" />
-        <div v-else class="checkout-card__placeholder">
-          Awaiting preview
-        </div>
+        <img :alt="` `" />
       </div>
       <div class="checkout-card__meta">
         <dl class="checkout-card__details">
@@ -65,6 +62,9 @@
     CartItemDesignPreviews,
     CartItemBlankPreviews,
     CartItemCanvasPreviews,
+    CartItemDesignCacheRefs,
+    CartItemBlankCacheRefs,
+    CartItemCanvasCacheRefs,
   } from '../../stores/cart';
   import { findMeasurementForSize } from '../../utils/sizeMeasurements';
   import { formatCurrency } from '../../utils/currency';
@@ -81,8 +81,11 @@
     sizeMeasurements,
     activeDesignPreview,
     designPreviews,
+    designPreviewCacheRefs,
     canvasPreviews,
+    canvasPreviewCacheRefs,
     blankDesignPreviews,
+    blankDesignCacheRefs,
     editingCartItemId,
     isEditingCartItem,
   } = storeToRefs(checkoutStore);
@@ -135,6 +138,14 @@
     };
   }
 
+  function buildDesignPreviewCachePayload(): CartItemDesignCacheRefs {
+    const refs = designPreviewCacheRefs.value;
+    return {
+      Front: refs?.Front ?? null,
+      Back: refs?.Back ?? null,
+    };
+  }
+
   function buildBlankPreviewPayload(): CartItemBlankPreviews {
     const previews = blankDesignPreviews.value;
     return {
@@ -143,11 +154,27 @@
     };
   }
 
+  function buildBlankCachePayload(): CartItemBlankCacheRefs {
+    const refs = blankDesignCacheRefs.value;
+    return {
+      Front: refs?.Front ?? null,
+      Back: refs?.Back ?? null,
+    };
+  }
+
   function buildCanvasPreviewPayload(): CartItemCanvasPreviews {
     const previews = canvasPreviews.value;
     return {
       Front: previews?.Front ?? null,
       Back: previews?.Back ?? null,
+    };
+  }
+
+  function buildCanvasCachePayload(): CartItemCanvasCacheRefs {
+    const refs = canvasPreviewCacheRefs.value;
+    return {
+      Front: refs?.Front ?? null,
+      Back: refs?.Back ?? null,
     };
   }
 
@@ -161,31 +188,31 @@
       const items = Array.isArray(details.items) ? details.items as Record<string, any>[] : [];
       const summaryPayload = summary
         ? {
-            bounds: summary.bounds
-              ? {
-                  widthInches: Number(summary.bounds.widthInches ?? 0).toFixed(2),
-                  heightInches: Number(summary.bounds.heightInches ?? 0).toFixed(2),
-                  areaSquareInches: Number(summary.bounds.areaSquareInches ?? 0).toFixed(2),
-                }
-              : undefined,
-            coverageRatio: typeof summary.coverageRatio === 'number'
-              ? `${(summary.coverageRatio * 100).toFixed(1)}%`
-              : null,
-            priceTier: summary.priceTier ?? null,
-            elementsCount: summary.elementsCount ?? items.length,
-            sumAABBInchesSq: typeof summary.sumAABBInchesSq === 'number'
-              ? Number(summary.sumAABBInchesSq).toFixed(2)
-              : null,
-            grid: summary.grid
-              ? {
-                  widthInches: summary.grid.widthInches != null ? Number(summary.grid.widthInches).toFixed(2) : null,
-                  heightInches: summary.grid.heightInches != null ? Number(summary.grid.heightInches).toFixed(2) : null,
-                  areaSquareInches: summary.grid.areaSquareInches != null
-                    ? Number(summary.grid.areaSquareInches).toFixed(2)
-                    : null,
-                }
-              : undefined,
-          }
+          bounds: summary.bounds
+            ? {
+              widthInches: Number(summary.bounds.widthInches ?? 0).toFixed(2),
+              heightInches: Number(summary.bounds.heightInches ?? 0).toFixed(2),
+              areaSquareInches: Number(summary.bounds.areaSquareInches ?? 0).toFixed(2),
+            }
+            : undefined,
+          coverageRatio: typeof summary.coverageRatio === 'number'
+            ? `${(summary.coverageRatio * 100).toFixed(1)}%`
+            : null,
+          priceTier: summary.priceTier ?? null,
+          elementsCount: summary.elementsCount ?? items.length,
+          sumAABBInchesSq: typeof summary.sumAABBInchesSq === 'number'
+            ? Number(summary.sumAABBInchesSq).toFixed(2)
+            : null,
+          grid: summary.grid
+            ? {
+              widthInches: summary.grid.widthInches != null ? Number(summary.grid.widthInches).toFixed(2) : null,
+              heightInches: summary.grid.heightInches != null ? Number(summary.grid.heightInches).toFixed(2) : null,
+              areaSquareInches: summary.grid.areaSquareInches != null
+                ? Number(summary.grid.areaSquareInches).toFixed(2)
+                : null,
+            }
+            : undefined,
+        }
         : null;
 
       const tableRows = items.map((item) => ({
@@ -304,8 +331,11 @@
   function buildCartPayload(): AddCartItemPayload {
     const designState = checkoutStore.captureDesignState();
     const designPreviewPayload = buildDesignPreviewPayload();
+    const designCachePayload = buildDesignPreviewCachePayload();
     const blankPreviewPayload = buildBlankPreviewPayload();
+    const blankCachePayload = buildBlankCachePayload();
     const canvasPreviewPayload = buildCanvasPreviewPayload();
+    const canvasCachePayload = buildCanvasCachePayload();
 
     const breakdown = calculatePricing({
       basePrice: color.value?.price ?? null,
@@ -326,8 +356,11 @@
       currency: color.value?.currency ?? null,
       previewImage: previewImage.value,
       designPreviews: clonePayload(designPreviewPayload),
+      designPreviewCacheRefs: clonePayload(designCachePayload),
       blankPreviews: clonePayload(blankPreviewPayload),
+      blankDesignCacheRefs: clonePayload(blankCachePayload),
       canvasPreviews: clonePayload(canvasPreviewPayload),
+      canvasPreviewCacheRefs: clonePayload(canvasCachePayload),
       measurement: measurementEntry.value,
       designState: clonePayload(designState ?? null),
       clothingDefinition: clonePayload(checkoutStore.clothingDefinition ?? null),
@@ -400,10 +433,10 @@
 
   .checkout-card__preview {
 
-    width: 5rem;
+
     height: 5rem;
     border-radius: 10px;
-    background: rgb(255, 255, 255);
+
     display: flex;
     justify-content: center;
     align-items: center;
@@ -415,6 +448,8 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
+    opacity: 1;
+
   }
 
   .checkout-card__placeholder {

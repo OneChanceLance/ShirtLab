@@ -8,6 +8,9 @@ type CartItemDesignView = 'Front' | 'Back';
 export type CartItemDesignPreviews = Record<CartItemDesignView, string | null>;
 export type CartItemBlankPreviews = Record<CartItemDesignView, string | null>;
 export type CartItemCanvasPreviews = Record<CartItemDesignView, string | null>;
+export type CartItemDesignCacheRefs = Record<CartItemDesignView, string | null>;
+export type CartItemBlankCacheRefs = Record<CartItemDesignView, string | null>;
+export type CartItemCanvasCacheRefs = Record<CartItemDesignView, string | null>;
 
 function deepClone<T>(value: T): T {
   if (value === null || value === undefined) return value;
@@ -30,8 +33,11 @@ export interface CartItem {
   currency: string | null;
   previewImage: string | null;
   designPreviews: CartItemDesignPreviews;
+  designPreviewCacheRefs: CartItemDesignCacheRefs;
   blankPreviews: CartItemBlankPreviews;
+  blankDesignCacheRefs: CartItemBlankCacheRefs;
   canvasPreviews: CartItemCanvasPreviews;
+  canvasPreviewCacheRefs: CartItemCanvasCacheRefs;
   measurement?: SizeMeasurementEntry;
   designState: SerializedDesignState | null;
   clothingDefinition: Record<string, any> | null;
@@ -48,8 +54,11 @@ export interface AddCartItemPayload {
   currency: string | null;
   previewImage: string | null;
   designPreviews?: Partial<CartItemDesignPreviews> | null;
+  designPreviewCacheRefs?: Partial<CartItemDesignCacheRefs> | null;
   blankPreviews?: Partial<CartItemBlankPreviews> | null;
+  blankDesignCacheRefs?: Partial<CartItemBlankCacheRefs> | null;
   canvasPreviews?: Partial<CartItemCanvasPreviews> | null;
+  canvasPreviewCacheRefs?: Partial<CartItemCanvasCacheRefs> | null;
   measurement?: SizeMeasurementEntry;
   designState: SerializedDesignState | null;
   clothingDefinition: Record<string, any> | null;
@@ -116,6 +125,39 @@ function normalizeCanvasPreviews(
   };
 }
 
+function normalizeCacheRefs(
+  refs: Partial<CartItemDesignCacheRefs> | null | undefined,
+): CartItemDesignCacheRefs {
+  const front = cleanPreview(refs?.Front);
+  const back = cleanPreview(refs?.Back);
+  return {
+    Front: front ?? null,
+    Back: back ?? null,
+  };
+}
+
+function normalizeBlankCacheRefs(
+  refs: Partial<CartItemBlankCacheRefs> | null | undefined,
+): CartItemBlankCacheRefs {
+  const front = cleanPreview(refs?.Front);
+  const back = cleanPreview(refs?.Back);
+  return {
+    Front: front ?? null,
+    Back: back ?? null,
+  };
+}
+
+function normalizeCanvasCacheRefs(
+  refs: Partial<CartItemCanvasCacheRefs> | null | undefined,
+): CartItemCanvasCacheRefs {
+  const front = cleanPreview(refs?.Front);
+  const back = cleanPreview(refs?.Back);
+  return {
+    Front: front ?? null,
+    Back: back ?? null,
+  };
+}
+
 export const useCartStore = defineStore('cart', {
   state: () => ({
     items: [] as CartItem[],
@@ -162,8 +204,11 @@ export const useCartStore = defineStore('cart', {
         existing.currency = payload.currency;
         existing.previewImage = payload.previewImage;
         existing.designPreviews = normalizeDesignPreviews(payload.designPreviews, payload.previewImage);
+        existing.designPreviewCacheRefs = normalizeCacheRefs(payload.designPreviewCacheRefs);
         existing.blankPreviews = normalizeBlankPreviews(payload.blankPreviews);
+        existing.blankDesignCacheRefs = normalizeBlankCacheRefs(payload.blankDesignCacheRefs);
         existing.canvasPreviews = normalizeCanvasPreviews(payload.canvasPreviews);
+        existing.canvasPreviewCacheRefs = normalizeCanvasCacheRefs(payload.canvasPreviewCacheRefs);
         existing.product = payload.product;
         existing.color = payload.color;
         existing.size = payload.size ?? null;
@@ -186,8 +231,11 @@ export const useCartStore = defineStore('cart', {
         currency: payload.currency,
         previewImage: payload.previewImage ?? null,
         designPreviews: normalizeDesignPreviews(payload.designPreviews, payload.previewImage ?? null),
+        designPreviewCacheRefs: normalizeCacheRefs(payload.designPreviewCacheRefs),
         blankPreviews: normalizeBlankPreviews(payload.blankPreviews),
+        blankDesignCacheRefs: normalizeBlankCacheRefs(payload.blankDesignCacheRefs),
         canvasPreviews: normalizeCanvasPreviews(payload.canvasPreviews),
+        canvasPreviewCacheRefs: normalizeCanvasCacheRefs(payload.canvasPreviewCacheRefs),
         measurement: payload.measurement,
         designState: deepClone(payload.designState),
         clothingDefinition: deepClone(payload.clothingDefinition),
@@ -238,12 +286,15 @@ export const useCartStore = defineStore('cart', {
         quantity,
         minimumQuantity: minimum,
         unitPrice: payload.unitPrice,
-        currency: payload.currency,
-        previewImage: payload.previewImage ?? null,
-        designPreviews: normalizeDesignPreviews(payload.designPreviews, payload.previewImage ?? null),
-        blankPreviews: normalizeBlankPreviews(payload.blankPreviews),
-        canvasPreviews: normalizeCanvasPreviews(payload.canvasPreviews),
-        measurement: payload.measurement,
+      currency: payload.currency,
+      previewImage: payload.previewImage ?? null,
+      designPreviews: normalizeDesignPreviews(payload.designPreviews, payload.previewImage ?? null),
+      designPreviewCacheRefs: normalizeCacheRefs(payload.designPreviewCacheRefs),
+      blankPreviews: normalizeBlankPreviews(payload.blankPreviews),
+      blankDesignCacheRefs: normalizeBlankCacheRefs(payload.blankDesignCacheRefs),
+      canvasPreviews: normalizeCanvasPreviews(payload.canvasPreviews),
+      canvasPreviewCacheRefs: normalizeCanvasCacheRefs(payload.canvasPreviewCacheRefs),
+      measurement: payload.measurement,
         designState: deepClone(payload.designState),
         clothingDefinition: deepClone(payload.clothingDefinition),
       };

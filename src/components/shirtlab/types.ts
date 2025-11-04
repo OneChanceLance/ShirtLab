@@ -6,6 +6,8 @@ export type ImageObject = {
     type: 'image';
     imgUrl: string;
     img?: HTMLImageElement;
+    assetCacheRef?: string | null;
+    originalSource?: string | null;
     showHandles: boolean, // 👈 default to true
     x: number;
     y: number;
