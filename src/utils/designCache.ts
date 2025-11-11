@@ -1,3 +1,4 @@
+import { changeDpiDataUrl } from 'changedpi';
 const DB_NAME = 'shirtlab-design-cache';
 const STORE_NAME = 'assets';
 const DB_VERSION = 1;
@@ -45,7 +46,10 @@ async function openDatabase(): Promise<IDBDatabase> {
 function generateKey(context: string | undefined, mime: string | undefined): CacheKey {
   const safeContext = context?.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'asset';
   const suffix = Math.random().toString(36).slice(2, 10);
-  const ext = mime?.split('/')[1]?.replace(/[^a-z0-9]+/gi, '') || 'img';
+  let extRaw = (mime?.split('/')[1] || '').toLowerCase();
+  if (extRaw.includes('svg')) extRaw = 'svg';
+  if (extRaw.startsWith('jpeg')) extRaw = 'jpg';
+  const ext = extRaw.replace(/[^a-z0-9]+/gi, '') || 'img';
   const timestamp = Date.now().toString(36);
   return `${safeContext}-${timestamp}-${suffix}.${ext}`;
 }
@@ -54,27 +58,66 @@ export function isCachedAssetRef(value: unknown): value is CachedAssetRef {
   return typeof value === 'string' && value.startsWith(CACHE_REF_PREFIX) && value.length > CACHE_REF_PREFIX.length;
 }
 
-function dataUrlToBlob(dataUrl: string): Blob {
-  const [header, base64] = dataUrl.split(',');
-  if (!header || !base64) {
-    throw new Error('Invalid data URL');
+function to300DpiIfImage(dataUrl: string): string {
+  try {
+    const header = dataUrl.slice(0, 64).toLowerCase();
+    if (!header.startsWith('data:image')) return dataUrl;
+    if (header.includes('image/svg')) return dataUrl; // SVG doesn't use DPI like raster formats
+    return changeDpiDataUrl(dataUrl, 300);
+  } catch {
+    return dataUrl;
   }
-  const mimeMatch = header.match(/data:(.*?)(;base64)?$/);
-  const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
-  const binary = typeof atob === 'function' ? atob(base64) : Buffer.from(base64, 'base64').toString('binary');
-  const length = binary.length;
-  const buffer = new Uint8Array(length);
-  for (let i = 0; i < length; i += 1) {
-    buffer[i] = binary.charCodeAt(i);
+}
+
+export function dataUrlToBlob(dataUrl: string): Blob {
+  const comma = dataUrl.indexOf(',');
+  if (comma < 0) {
+    throw new Error('Invalid data URL: missing comma');
   }
-  return new Blob([buffer], { type: mime });
+
+  const header = dataUrl.slice(0, comma);
+  let payload = dataUrl.slice(comma + 1);
+
+  // Parse "data:[<mime>][;param]*,...."
+  const match = header.match(/^data:([^;,]+)?((?:;[^,;]+)*)$/i);
+  const mime = (match?.[1] || 'application/octet-stream').toLowerCase();
+  const params = match?.[2] || '';
+  const isBase64 = /;base64\b/i.test(params);
+
+  if (isBase64) {
+    // url-safe → standard
+    payload = payload.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    const mod = payload.length % 4;
+    if (mod) payload += '='.repeat(4 - mod);
+
+    const bin = atob(payload);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return new Blob([buf], { type: mime });
+  }
+
+  // Non-base64 branch (e.g., data:image/svg+xml;utf8,<svg ...>)
+  let text: string;
+  try {
+    text = decodeURIComponent(payload);
+  } catch {
+    // If it's not percent-encoded, use raw
+    text = payload;
+  }
+
+  if (typeof TextEncoder !== 'undefined') {
+    const enc = new TextEncoder();
+    return new Blob([enc.encode(text)], { type: mime });
+  }
+  return new Blob([text], { type: mime });
 }
 
 export async function storeDataUrlInCache(dataUrl: string, context?: string): Promise<CachedAssetRef | null> {
   if (!ensureBrowser()) return null;
   if (!dataUrl.startsWith('data:')) return null;
   try {
-    const blob = dataUrlToBlob(dataUrl);
+    const processed = to300DpiIfImage(dataUrl);
+    const blob = dataUrlToBlob(processed);
     const key = generateKey(context, blob.type);
     const db = await openDatabase();
     await new Promise<void>((resolve, reject) => {

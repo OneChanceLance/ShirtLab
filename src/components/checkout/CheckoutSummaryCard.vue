@@ -53,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, ref, watch } from 'vue';
+  import { computed, nextTick, ref, watch } from 'vue';
   import { storeToRefs } from 'pinia';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
@@ -69,6 +69,9 @@
   import { findMeasurementForSize } from '../../utils/sizeMeasurements';
   import { formatCurrency } from '../../utils/currency';
   import { calculatePricing } from '../../utils/pricing';
+  import { describePreviewSource, type PreviewView } from '../../utils/previewPipeline';
+  import { storeDataUrlInCache, isCachedAssetRef } from '../../utils/designCache';
+  import { changeDpiDataUrl } from 'changedpi';
 
   const checkoutStore = useCheckoutStore();
   const cartStore = useCartStore();
@@ -176,6 +179,169 @@
       Front: refs?.Front ?? null,
       Back: refs?.Back ?? null,
     };
+  }
+
+  type PreviewBundle = {
+    design: CartItemDesignPreviews;
+    designCache: CartItemDesignCacheRefs;
+    blank: CartItemBlankPreviews;
+    blankCache: CartItemBlankCacheRefs;
+    canvas: CartItemCanvasPreviews;
+    canvasCache: CartItemCanvasCacheRefs;
+  };
+
+  async function ensureCacheForView(
+    view: PreviewView,
+    dataUrl: string | null,
+    existingRef: string | null,
+    label: string,
+  ): Promise<string | null> {
+    if (existingRef && isCachedAssetRef(existingRef)) return existingRef;
+    if (!dataUrl || !dataUrl.startsWith('data:')) return existingRef;
+    try {
+      const stored = await storeDataUrlInCache(dataUrl, label);
+      if (stored) {
+        console.log('[CheckoutSummaryCard] Cached preview asset', { view, label, stored });
+        return stored;
+      }
+    } catch (error) {
+      console.warn('[CheckoutSummaryCard] Failed to cache preview asset', { view, label }, error);
+    }
+    return existingRef;
+  }
+
+  async function hydratePreviewBundleCaches(bundle: PreviewBundle, contextLabel: string) {
+    const views: PreviewView[] = ['Front', 'Back'];
+    await Promise.all(
+      views.map(async (view) => {
+        bundle.designCache[view] = await ensureCacheForView(
+          view,
+          bundle.design[view],
+          bundle.designCache[view],
+          `${contextLabel}-design-${view.toLowerCase()}`,
+        );
+
+        bundle.blankCache[view] = await ensureCacheForView(
+          view,
+          bundle.blank[view],
+          bundle.blankCache[view],
+          `${contextLabel}-blank-${view.toLowerCase()}`,
+        );
+
+        bundle.canvasCache[view] = await ensureCacheForView(
+          view,
+          bundle.canvas[view],
+          bundle.canvasCache[view],
+          `${contextLabel}-canvas-${view.toLowerCase()}`,
+        );
+      }),
+    );
+  }
+
+  function to300(dataUrl: string | null): string | null {
+    if (!dataUrl || typeof dataUrl !== 'string') return dataUrl;
+    const head = dataUrl.slice(0, 64).toLowerCase();
+    if (!head.startsWith('data:image')) return dataUrl;
+    if (head.includes('image/svg')) return dataUrl;
+    try {
+      return changeDpiDataUrl(dataUrl, 300);
+    } catch {
+      return dataUrl;
+    }
+  }
+
+  function forceBundleDpi(bundle: PreviewBundle) {
+    const views: PreviewView[] = ['Front', 'Back'];
+    for (const v of views) {
+      bundle.design[v] = to300(bundle.design[v]);
+      bundle.blank[v] = to300(bundle.blank[v]);
+      bundle.canvas[v] = to300(bundle.canvas[v]);
+    }
+  }
+
+  function collectPreviewBundle(context: string): PreviewBundle {
+    const bundle: PreviewBundle = {
+      design: buildDesignPreviewPayload(),
+      designCache: buildDesignPreviewCachePayload(),
+      blank: buildBlankPreviewPayload(),
+      blankCache: buildBlankCachePayload(),
+      canvas: buildCanvasPreviewPayload(),
+      canvasCache: buildCanvasCachePayload(),
+    };
+    // Force all data URLs to carry 300 DPI before we cache/upload anywhere.
+    forceBundleDpi(bundle);
+    logPreviewBundle(context, bundle);
+    return bundle;
+  }
+
+  function logPreviewBundle(context: string, bundle: PreviewBundle) {
+    try {
+      console.groupCollapsed(`[CheckoutSummaryCard] Preview bundle · ${context}`);
+      const rows = [
+        {
+          slot: 'design.Front',
+          source: describePreviewSource(bundle.design.Front),
+          cacheRef: bundle.designCache.Front ?? '<none>',
+        },
+        {
+          slot: 'design.Back',
+          source: describePreviewSource(bundle.design.Back),
+          cacheRef: bundle.designCache.Back ?? '<none>',
+        },
+        {
+          slot: 'blank.Front',
+          source: describePreviewSource(bundle.blank.Front),
+          cacheRef: bundle.blankCache.Front ?? '<none>',
+        },
+        {
+          slot: 'blank.Back',
+          source: describePreviewSource(bundle.blank.Back),
+          cacheRef: bundle.blankCache.Back ?? '<none>',
+        },
+        {
+          slot: 'canvas.Front',
+          source: describePreviewSource(bundle.canvas.Front),
+          cacheRef: bundle.canvasCache.Front ?? '<none>',
+        },
+        {
+          slot: 'canvas.Back',
+          source: describePreviewSource(bundle.canvas.Back),
+          cacheRef: bundle.canvasCache.Back ?? '<none>',
+        },
+      ];
+      console.table(rows);
+      console.groupEnd();
+    } catch (error) {
+      console.warn('[CheckoutSummaryCard] Failed to log preview bundle', error, bundle);
+    }
+  }
+
+  function logCartPayload(
+    payload: AddCartItemPayload,
+    breakdown: ReturnType<typeof calculatePricing>,
+    context: string,
+  ) {
+    try {
+      console.groupCollapsed(`[CheckoutSummaryCard] Cart payload · ${context}`);
+      console.log('Variant', {
+        product: payload.product?.name ?? payload.product?.id ?? '<none>',
+        color: payload.color?.name ?? payload.color?.id ?? '<none>',
+        size: payload.size ?? '<none>',
+        quantity: payload.quantity,
+        min: payload.minimumQuantity,
+        designId: payload.designId,
+      });
+      console.log('Preview image', describePreviewSource(payload.previewImage));
+      console.log('Pricing', {
+        base: breakdown.basePrice,
+        designCharge: breakdown.designChargeTotal,
+        quantityDiscount: breakdown.quantityDiscount,
+        finalUnit: breakdown.finalUnitPrice,
+      });
+      console.groupEnd();
+    } catch (error) {
+      console.warn('[CheckoutSummaryCard] Failed to log cart payload', error, payload);
+    }
   }
 
   const ENABLE_PRICING_LOGS = true;
@@ -302,11 +468,67 @@
     }
   });
 
-  function addCurrentSelectionToCart() {
+  let runningHighResGeneration: Promise<void> | null = null;
+  let highResGenerationVersion = 0;
+  const HIGH_RES_DEBOUNCE_MS = 750;
+
+  async function ensureHighResPreviews() {
+    if (typeof window === 'undefined') return;
+    const generator = window.__shirtlabGenerateHighResPreviews;
+    if (typeof generator !== 'function') {
+      console.warn('[CheckoutSummaryCard] High-res generator is unavailable on window.');
+      return;
+    }
+
+    // If a run is already in progress, reuse it
+    if (runningHighResGeneration) {
+      console.log('[CheckoutSummaryCard] Reusing in-flight high-res generation promise.');
+      await runningHighResGeneration;
+      return;
+    }
+
+    const currentVersion = ++highResGenerationVersion;
+    console.log('[CheckoutSummaryCard] Starting high-res preview generation', {
+      version: currentVersion,
+    });
+    runningHighResGeneration = (async () => {
+      try {
+        await Promise.race([
+          generator(),
+          new Promise<void>((resolve) => setTimeout(resolve, HIGH_RES_DEBOUNCE_MS)),
+        ]);
+        // Refresh previews after generation settles
+        await nextTick();
+        console.log('[CheckoutSummaryCard] High-res preview generation complete', {
+          version: currentVersion,
+        });
+      } catch (error) {
+        console.warn('[CheckoutSummaryCard] Failed to generate high-res previews', error);
+      } finally {
+        if (currentVersion === highResGenerationVersion) {
+          runningHighResGeneration = null;
+        }
+      }
+    })();
+
+    await runningHighResGeneration;
+  }
+
+  async function addCurrentSelectionToCart() {
     if (!hasVariant.value) return;
     checkoutStore.ensureMinimumQuantity();
-    const payload = buildCartPayload();
+    console.log('[CheckoutSummaryCard] addCurrentSelectionToCart invoked', {
+      quantity: checkoutStore.quantity,
+      productId: product.value?.id,
+      colorId: color.value?.id,
+    });
+    await ensureHighResPreviews();
+    const payload = await buildCartPayload();
     cartStore.addItem(payload);
+    console.log('[CheckoutSummaryCard] addCurrentSelectionToCart complete', {
+      designId: payload.designId,
+      quantity: payload.quantity,
+    });
   }
 
   const showPrimaryFeedback = ref(false);
@@ -328,24 +550,21 @@
     }
   }
 
-  function buildCartPayload(): AddCartItemPayload {
+  async function buildCartPayload(): Promise<AddCartItemPayload> {
     const designState = checkoutStore.captureDesignState();
-    const designPreviewPayload = buildDesignPreviewPayload();
-    const designCachePayload = buildDesignPreviewCachePayload();
-    const blankPreviewPayload = buildBlankPreviewPayload();
-    const blankCachePayload = buildBlankCachePayload();
-    const canvasPreviewPayload = buildCanvasPreviewPayload();
-    const canvasCachePayload = buildCanvasCachePayload();
+    const previewBundle = collectPreviewBundle(isEditingCartItem.value ? 'editing-item' : 'new-item');
+    const designIdentifier = designId.value ?? `checkout-${Date.now().toString(36)}`;
+    await hydratePreviewBundleCaches(previewBundle, designIdentifier);
 
     const breakdown = calculatePricing({
       basePrice: color.value?.price ?? null,
       designState: designState ?? null,
-      designPreviews: designPreviewPayload,
+      designPreviews: previewBundle.design,
       clothingDefinition: checkoutStore.clothingDefinition ?? null,
       quantity: checkoutStore.quantity,
     });
 
-    return {
+    const payload: AddCartItemPayload = {
       product: product.value ?? null,
       color: color.value ?? null,
       size: size.value ?? null,
@@ -355,23 +574,33 @@
       unitPrice: breakdown.finalUnitPrice,
       currency: color.value?.currency ?? null,
       previewImage: previewImage.value,
-      designPreviews: clonePayload(designPreviewPayload),
-      designPreviewCacheRefs: clonePayload(designCachePayload),
-      blankPreviews: clonePayload(blankPreviewPayload),
-      blankDesignCacheRefs: clonePayload(blankCachePayload),
-      canvasPreviews: clonePayload(canvasPreviewPayload),
-      canvasPreviewCacheRefs: clonePayload(canvasCachePayload),
+      designPreviews: clonePayload(previewBundle.design),
+      designPreviewCacheRefs: clonePayload(previewBundle.designCache),
+      blankPreviews: clonePayload(previewBundle.blank),
+      blankDesignCacheRefs: clonePayload(previewBundle.blankCache),
+      canvasPreviews: clonePayload(previewBundle.canvas),
+      canvasPreviewCacheRefs: clonePayload(previewBundle.canvasCache),
       measurement: measurementEntry.value,
       designState: clonePayload(designState ?? null),
       clothingDefinition: clonePayload(checkoutStore.clothingDefinition ?? null),
     };
+
+    logCartPayload(payload, breakdown, isEditingCartItem.value ? 'editing-item' : 'new-item');
+    return payload;
   }
 
-  function updateCurrentSelectionInCart() {
+  async function updateCurrentSelectionInCart() {
     const id = editingCartItemId.value;
     if (!id) return;
-    const payload = buildCartPayload();
+    console.log('[CheckoutSummaryCard] updateCurrentSelectionInCart', { id });
+    await ensureHighResPreviews();
+    const payload = await buildCartPayload();
     const nextId = cartStore.updateItem(id, payload);
+    console.log('[CheckoutSummaryCard] updateCurrentSelectionInCart payload applied', {
+      id,
+      nextId,
+      designId: payload.designId,
+    });
     if (nextId) {
       checkoutStore.setEditingCartItemId(nextId);
     } else {
@@ -379,17 +608,26 @@
     }
   }
 
-  function handlePrimaryAction() {
+  async function handlePrimaryAction() {
     if (!hasVariant.value) return;
     checkoutStore.ensureMinimumQuantity();
     const wasEditing = isEditingCartItem.value;
+    console.log('[CheckoutSummaryCard] handlePrimaryAction', {
+      wasEditing,
+      quantity: checkoutStore.quantity,
+    });
     if (wasEditing) {
-      updateCurrentSelectionInCart();
+      await updateCurrentSelectionInCart();
       checkoutStore.finishEditingCartItem();
       checkoutStore.setOpen(true);
     } else {
-      const payload = buildCartPayload();
+      await ensureHighResPreviews();
+      const payload = await buildCartPayload();
       cartStore.addItem(payload);
+      console.log('[CheckoutSummaryCard] handlePrimaryAction added item', {
+        designId: payload.designId,
+        quantity: payload.quantity,
+      });
     }
     showPrimaryFeedback.value = true;
     setTimeout(() => {
@@ -397,19 +635,29 @@
     }, 1200);
   }
 
-  function handleCheckout() {
+  async function handleCheckout() {
+    if (typeof window !== 'undefined' && typeof window.__shirtlabLogUploadPlan === 'function') {
+      window.__shirtlabLogUploadPlan('checkout-button');
+    }
     checkoutStore.ensureMinimumQuantity();
+    console.log('[CheckoutSummaryCard] handleCheckout triggered', {
+      cartIsEmpty: cartIsEmpty.value,
+      hasVariant: hasVariant.value,
+      isEditing: isEditingCartItem.value,
+    });
     if (cartIsEmpty.value && hasVariant.value) {
-      addCurrentSelectionToCart();
+      await addCurrentSelectionToCart();
     }
     if (isEditingCartItem.value) {
-      updateCurrentSelectionInCart();
+      await updateCurrentSelectionInCart();
     }
     checkoutStore.setOpen(true);
+    console.log('[CheckoutSummaryCard] Checkout drawer opened from summary card.');
   }
 
   function handleViewCart() {
     if (cartIsEmpty.value) return;
+    console.log('[CheckoutSummaryCard] Opening cart panel from summary card.');
     cartStore.openPanel();
   }
 </script>
