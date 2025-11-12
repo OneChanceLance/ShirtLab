@@ -72,6 +72,7 @@
   import { describePreviewSource, type PreviewView } from '../../utils/previewPipeline';
   import { storeDataUrlInCache, isCachedAssetRef } from '../../utils/designCache';
   import { changeDpiDataUrl } from 'changedpi';
+  import { startProcessingIndicator } from '../../composables/useProcessingIndicator';
 
   const checkoutStore = useCheckoutStore();
   const cartStore = useCartStore();
@@ -636,6 +637,7 @@
   }
 
   async function handleCheckout() {
+    startProcessingIndicator();
     if (typeof window !== 'undefined' && typeof window.__shirtlabLogUploadPlan === 'function') {
       window.__shirtlabLogUploadPlan('checkout-button');
     }

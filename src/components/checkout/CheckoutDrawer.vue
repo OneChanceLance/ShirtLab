@@ -388,6 +388,11 @@
     normalizePreview,
     preferNonBlobSources,
   } from '../../utils/previewPipeline';
+  import {
+    startProcessingIndicator,
+    finishProcessingIndicator,
+    markProcessingVariant,
+  } from '../../composables/useProcessingIndicator';
 
   type StripeConfirmResult = {
     error?: { message?: string } | null;
@@ -834,7 +839,11 @@
 
   watch(isOpen, (open) => {
     if (open) {
+      startProcessingIndicator();
+      evaluateProcessingVariants();
       logCurrentUploadPlan('checkout-open');
+    } else {
+      finishProcessingIndicator();
     }
   });
 
@@ -1142,12 +1151,6 @@
     if (!uploadProgress.total) return 0;
     return Math.min(100, Math.round((uploadProgress.current / uploadProgress.total) * 100));
   });
-
-  function isLikelyHostedUrl(value: string | null | undefined): boolean {
-    if (typeof value !== 'string') return false;
-    const trimmed = value.trim().toLowerCase();
-    return trimmed.startsWith('http://') || trimmed.startsWith('https://');
-  }
 
   async function blobToDataUrl(blob: Blob): Promise<string> {
     return await new Promise((resolve, reject) => {
@@ -1856,10 +1859,6 @@
     return base || `design-${index + 1}`;
   }
 
-  function generateRandomOrderItemId(): string {
-    return Math.floor(Math.random() * 100000000).toString().padStart(8, '0');
-  }
-
   function splitCustomerName(fullName: string | null | undefined): { firstName: string; lastName: string } {
     const raw = typeof fullName === 'string' ? fullName.trim() : '';
     if (!raw) {
@@ -2367,18 +2366,6 @@
     };
   }
 
-  function resolvePrintPreviewSources(item: CartItem | null): Record<PreviewView, string | null> {
-    if (!item) {
-      return { Front: null, Back: null };
-    }
-    const canvases = item.canvasPreviews ?? { Front: null, Back: null };
-    const designs = item.designPreviews ?? { Front: null, Back: null };
-    return {
-      Front: normalizePreview(canvases.Front) ?? normalizePreview(designs.Front) ?? null,
-      Back: normalizePreview(canvases.Back) ?? normalizePreview(designs.Back) ?? null,
-    };
-  }
-
   // When editing the active cart item, prefer live previews from checkoutStore
   const editingActiveItem = computed(() =>
     Boolean(checkoutStore.isEditingCartItem && checkoutStore.editingCartItemId === activeCartItemId.value)
@@ -2405,20 +2392,6 @@
     return resolvePreviewSources(item);
   });
 
-  const printPreviewSources = computed(() => {
-    const item = activeCartItem.value;
-    if (!item) return { Front: null, Back: null } as Record<PreviewView, string | null>;
-    if (editingActiveItem.value) {
-      const liveCanvas = checkoutStore.canvasPreviews ?? { Front: null, Back: null } as Record<PreviewView, string | null>;
-      const liveDesign = checkoutStore.designPreviews ?? { Front: null, Back: null } as Record<PreviewView, string | null>;
-      return {
-        Front: normalizePreview(liveCanvas.Front) ?? normalizePreview(liveDesign.Front) ?? normalizePreview(item.canvasPreviews?.Front) ?? normalizePreview(item.designPreviews?.Front) ?? null,
-        Back: normalizePreview(liveCanvas.Back) ?? normalizePreview(liveDesign.Back) ?? normalizePreview(item.canvasPreviews?.Back) ?? normalizePreview(item.designPreviews?.Back) ?? null,
-      };
-    }
-    return resolvePrintPreviewSources(item);
-  });
-
   // New: blankPreviewSources prefers hydrated blank previews (from store) and falls back to canvas/item blanks
   const blankPreviewSources = computed(() => {
     const item = activeCartItem.value;
@@ -2443,6 +2416,14 @@
     }
     return resolveBlankPreviewSources(item);
   });
+
+  function evaluateProcessingVariants() {
+    markProcessingVariant('withFront', previewSources.value.Front);
+    markProcessingVariant('withBack', previewSources.value.Back);
+    markProcessingVariant('withoutFront', blankPreviewSources.value.Front);
+    markProcessingVariant('withoutBack', blankPreviewSources.value.Back);
+  }
+
   const showDesignOnly = ref(false);
   const previewAvailability = computed<Record<PreviewView, boolean>>(() => ({
     Front: showDesignOnly.value
@@ -2474,6 +2455,19 @@
       previewView.value = fallback;
     }
   }, { immediate: true });
+
+  watch(() => previewSources.value.Front, (value) => {
+    markProcessingVariant('withFront', value);
+  });
+  watch(() => previewSources.value.Back, (value) => {
+    markProcessingVariant('withBack', value);
+  });
+  watch(() => blankPreviewSources.value.Front, (value) => {
+    markProcessingVariant('withoutFront', value);
+  });
+  watch(() => blankPreviewSources.value.Back, (value) => {
+    markProcessingVariant('withoutBack', value);
+  });
 
   // Keep the overlay in sync with live edits. When any preview/canvas state changes while the modal is open,
   // rebuild its data so the user always sees the latest renders before uploading.
@@ -2790,6 +2784,16 @@
 
   .checkout-overlay-fade-enter-from,
   .checkout-overlay-fade-leave-to {
+    opacity: 0;
+  }
+
+  .processing-overlay-fade-enter-active,
+  .processing-overlay-fade-leave-active {
+    transition: opacity 0.2s ease;
+  }
+
+  .processing-overlay-fade-enter-from,
+  .processing-overlay-fade-leave-to {
     opacity: 0;
   }
 

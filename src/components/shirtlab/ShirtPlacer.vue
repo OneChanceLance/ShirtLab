@@ -72,7 +72,7 @@
   import ViewPort from '../../components/shirtlab/Viewports/ViewPort.vue';
   import type { TextObject, ImageObject, ElementType, ElementVariant } from './types'
   // ADD with the other imports
-  import { withDefaults, getEffectTransform, applyToContext } from '../sideMenu/types/effectsList';
+  import { withDefaults, getEffectTransform, getEffectAdvance, applyToContext } from '../sideMenu/types/effectsList';
   import { getAABB, getAABBCorners, getRotatedCorners, pointInRotatedRect } from './utils/geometry';
   import { useDesignLayers } from './composables/useDesignLayers';
   import { createGridState, type DesignGrid, type View } from './composables/useGrid';
