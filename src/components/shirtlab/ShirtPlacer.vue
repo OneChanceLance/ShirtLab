@@ -91,7 +91,137 @@
     isCachedAssetRef,
     type CachedAssetRef,
   } from '../../utils/designCache';
+
+
   import { describePreviewSource, normalizePreview } from '../../utils/previewPipeline';
+
+  // ===== High‑res + 72‑dpi pipeline (single source of truth) =====
+  // We build the *master* from the existing hi‑res data URL, then derive a 72‑dpi
+  // preview from that *same* pixels, so they always match.
+
+  async function blobToDataUrl(blob: Blob): Promise<string> {
+    return await new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onerror = () => reject(fr.error);
+      fr.onload = () => resolve(String(fr.result));
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+    const [head, b64] = dataUrl.split(',');
+    const mime = /data:(.*?);base64/.exec(head)?.[1] || 'application/octet-stream';
+    const bin = atob(b64);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+
+  async function stampDpiOnBlob(blob: Blob, dpi: number): Promise<Blob> {
+    try {
+      const asData = await blobToDataUrl(blob);
+      const stamped = changeDpiDataUrl(asData, dpi);
+      return await dataUrlToBlob(stamped);
+    } catch {
+      // If stamping fails, return original
+      return blob;
+    }
+  }
+
+  async function downscaleBlobPng(sourceBlob: Blob, scale: number): Promise<Blob> {
+    // scale is e.g. 72/300
+    const bmp = await createImageBitmap(sourceBlob);
+    const targetW = Math.max(1, Math.round(bmp.width * scale));
+    const targetH = Math.max(1, Math.round(bmp.height * scale));
+
+    let cvs: HTMLCanvasElement | OffscreenCanvas;
+    if (typeof OffscreenCanvas !== 'undefined') {
+      cvs = new OffscreenCanvas(targetW, targetH);
+      const ctx = (cvs as OffscreenCanvas).getContext('2d')!;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high' as any;
+      ctx.drawImage(bmp, 0, 0, targetW, targetH);
+      return await (cvs as OffscreenCanvas).convertToBlob({ type: 'image/png' });
+    } else {
+      const c = document.createElement('canvas');
+      c.width = targetW; c.height = targetH;
+      const ctx = c.getContext('2d')!;
+      ctx.imageSmoothingEnabled = true;
+      (ctx as any).imageSmoothingQuality = 'high';
+      ctx.drawImage(bmp, 0, 0, targetW, targetH);
+      const blob = await new Promise<Blob>((resolve) => c.toBlob(b => resolve(b!), 'image/png'));
+      return blob;
+    }
+  }
+
+  /**
+   * Produce a 300‑dpi master PNG *and* a 72‑dpi preview from the same pixels.
+   * Does not upload — returns blobs + object URLs so callers can store/upload.
+   */
+  async function buildMasterAndPreview(view: View): Promise<{
+    masterBlob: Blob;            // PNG, 300 dpi
+    masterUrl: string;           // object URL (caller should revoke when done)
+    previewBlob: Blob;           // PNG, 72 dpi (downscaled from master)
+    previewUrl: string;          // object URL (caller should revoke when done)
+    meta: { width: number; height: number; dpiMaster: number; dpiPreview: number; };
+  } | null> {
+    const channel = viewPreviewChannels[view];
+    // Prefer the actual hi‑res if available; fall back to display/canvas
+    const src = normalizePreview(channel.hiResRef.value || channel.displayRef.value || channel.canvasRef.value);
+    if (!src) {
+      console.warn('[ShirtPlacer] buildMasterAndPreview: no source available for', view);
+      return null;
+    }
+
+    let masterBlobRaw: Blob | null = null;
+
+    if (src.startsWith('data:')) {
+      // Already a data URL — ensure 300 dpi stamp and keep pixels intact
+      const stamped = changeDpiDataUrl(src, 300);
+      masterBlobRaw = await dataUrlToBlob(stamped);
+    } else if (src.startsWith('blob:') || src.startsWith('http')) {
+      try {
+        const resp = await fetch(src, { mode: 'cors' });
+        masterBlobRaw = await resp.blob();
+      } catch (e) {
+        console.warn('[ShirtPlacer] buildMasterAndPreview: fetch failed, falling back to displayRef', e);
+        return null;
+      }
+      masterBlobRaw = await stampDpiOnBlob(masterBlobRaw, 300);
+    }
+
+    if (!masterBlobRaw) return null;
+
+    // Derive preview by inch-accurate scale (72/300), then stamp 72 dpi
+    const scale = 72 / 300;
+    const previewBlobRaw = await downscaleBlobPng(masterBlobRaw, scale);
+    const previewBlob = await stampDpiOnBlob(previewBlobRaw, 72);
+
+    // Finalize master (may already be stamped)
+    const masterBlob = await stampDpiOnBlob(masterBlobRaw, 300);
+
+    // Object URLs for immediate UI use (remember to revoke later)
+    const masterUrl = URL.createObjectURL(masterBlob);
+    const previewUrl = URL.createObjectURL(previewBlob);
+
+    // Expose dimensions from master
+    const bmp = await createImageBitmap(masterBlob);
+    const width = bmp.width;
+    const height = bmp.height;
+
+    return {
+      masterBlob,
+      masterUrl,
+      previewBlob,
+      previewUrl,
+      meta: { width, height, dpiMaster: 300, dpiPreview: 72 },
+    };
+  }
+
+  // -----------------------------------------------------
+  // Local utility shims (fix TS/undefined errors, safe defaults)
+  // -----------------------------------------------------
 
   const props = defineProps<{
     clothing?: {
@@ -1003,10 +1133,6 @@
   const frontDesignCacheRef = ref<CachedAssetRef | null>(null);
   const backDesignCacheRef = ref<CachedAssetRef | null>(null);
   const hydratedDesignRef: Record<View, CachedAssetRef | null> = {
-    Front: null,
-    Back: null,
-  };
-  const hydratedBlankRef: Record<View, CachedAssetRef | null> = {
     Front: null,
     Back: null,
   };

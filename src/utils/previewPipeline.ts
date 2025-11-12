@@ -33,8 +33,24 @@ export function preferNonBlobSources(candidates: Array<string | null | undefined
     .map((candidate) => normalizePreview(candidate))
     .filter((candidate): candidate is string => Boolean(candidate));
   if (!normalized.length) return [];
-  const nonBlob = normalized.filter((candidate) => !candidate.startsWith('blob:'));
-  return nonBlob.length ? nonBlob : normalized;
+
+  const dataUrls = normalized.filter((candidate) => candidate.startsWith('data:'));
+  const otherNonBlob = normalized.filter(
+    (candidate) => !candidate.startsWith('data:') && !candidate.startsWith('blob:'),
+  );
+  const blobUrls = normalized.filter((candidate) => candidate.startsWith('blob:'));
+
+  if (dataUrls.length) {
+    // Prioritize inline base64 previews so checkout always receives self-contained sources.
+    return [...dataUrls, ...otherNonBlob, ...blobUrls];
+  }
+
+  if (otherNonBlob.length) {
+    // Prefer non-blob (remote/cache) first, but keep blob URLs as fallback
+    return [...otherNonBlob, ...blobUrls];
+  }
+
+  return blobUrls;
 }
 
 export function describePreviewSource(source: string | null | undefined): string {

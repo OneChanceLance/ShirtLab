@@ -570,6 +570,22 @@
     },
   };
 
+  // Only upload design-only canvas renders; keep garment previews client-side.
+  const UPLOAD_WITH_SHIRT_PREVIEWS = false;
+  const PREVIEW_UPLOAD_SLOTS = Object.keys(PREVIEW_UPLOAD_SLOT_CONFIG) as PreviewUploadSlotKey[];
+  const WITH_SHIRT_UPLOAD_SLOTS = new Set<PreviewUploadSlotKey>(['front-with-shirt', 'back-with-shirt']);
+
+  function previewSlotEnabled(slot: PreviewUploadSlotKey): boolean {
+    if (!UPLOAD_WITH_SHIRT_PREVIEWS && WITH_SHIRT_UPLOAD_SLOTS.has(slot)) {
+      return false;
+    }
+    return true;
+  }
+
+  function getEnabledPreviewUploadSlots(): PreviewUploadSlotKey[] {
+    return PREVIEW_UPLOAD_SLOTS.filter(previewSlotEnabled);
+  }
+
   // Prefer cache refs & data URLs for uploads (cross-browser), blob last
   function buildUploadCandidates(item: CartItem, candidates: PreviewCandidateSet) {
     const usingLive = checkoutStore.editingCartItemId === item.id;
@@ -696,33 +712,33 @@
     const backBlankCache = normalizePreview(blankCacheRefs.Back);
 
     // Slimmed: only the top 3 options, no garment/color fallbacks
-    const frontWithShirt = dedupePreviewList([
+    const frontWithShirt = dedupePreviewList(preferNonBlobSources([
       liveFrontWithShirt,
       frontDesignCache,
       frontPreviewStored,
-    ]);
+    ]));
 
-    const backWithShirt = dedupePreviewList([
+    const backWithShirt = dedupePreviewList(preferNonBlobSources([
       liveBackWithShirt,
       backDesignCache,
       backPreviewStored,
-    ]);
+    ]));
 
     // Prefer hydrated blank, then canvas, then blank cache. No fallbacks.
     const frontWithoutShirt = hasFrontDesign
-      ? dedupePreviewList([
+      ? dedupePreviewList(preferNonBlobSources([
         liveFrontBlank,
         canvasSources.Front,
         frontBlankCache,
-      ])
+      ]))
       : [];
 
     const backWithoutShirt = hasBackDesign
-      ? dedupePreviewList([
+      ? dedupePreviewList(preferNonBlobSources([
         liveBackBlank,
         canvasSources.Back,
         backBlankCache,
-      ])
+      ]))
       : [];
 
     logPreviewBuckets('checkoutDrawer.buildPreviewCandidates', {
@@ -776,9 +792,13 @@
       return fallback;
     };
 
-    const frontWithSource = resolveOrWarn('Front with shirt', candidates.frontWithShirt, uploads?.frontWithShirt);
+    const frontWithSource = previewSlotEnabled('front-with-shirt')
+      ? resolveOrWarn('Front with shirt', candidates.frontWithShirt, uploads?.frontWithShirt)
+      : resolveDisplaySource(candidates.frontWithShirt, null);
     const frontWithoutSource = resolveOrWarn('Front design-only', candidates.frontWithoutShirt, uploads?.frontWithoutShirt);
-    const backWithSource = resolveOrWarn('Back with shirt', candidates.backWithShirt, uploads?.backWithShirt);
+    const backWithSource = previewSlotEnabled('back-with-shirt')
+      ? resolveOrWarn('Back with shirt', candidates.backWithShirt, uploads?.backWithShirt)
+      : resolveDisplaySource(candidates.backWithShirt, null);
     const backWithoutSource = resolveOrWarn('Back design-only', candidates.backWithoutShirt, uploads?.backWithoutShirt);
 
     const previews = [
@@ -1564,7 +1584,8 @@
     };
 
     const basePath = ['orders', orderToken, itemSlug];
-    return (Object.keys(PREVIEW_UPLOAD_SLOT_CONFIG) as PreviewUploadSlotKey[]).map((slot) => {
+    const slots = getEnabledPreviewUploadSlots();
+    return slots.map((slot) => {
       const meta = PREVIEW_UPLOAD_SLOT_CONFIG[slot];
       const candidates = dedupePreviewList(slotSeeds[slot] ?? []);
       const required = meta.enforce || (meta.enforceWhenCandidates ? candidates.length > 0 : false);
@@ -1662,7 +1683,7 @@
     try {
       console.groupCollapsed(`[PreviewUpload] results :: item=${cartItemId}`);
       console.table(
-        (Object.keys(PREVIEW_UPLOAD_SLOT_CONFIG) as PreviewUploadSlotKey[]).map((slot) => {
+        getEnabledPreviewUploadSlots().map((slot) => {
           const result = results[slot];
           return {
             Slot: slot,
@@ -1682,9 +1703,9 @@
 
   function mapPreviewUploadUrls(results: PreviewUploadResultMap): ExportPreviewUploads {
     return {
-      frontWithShirt: results['front-with-shirt']?.url ?? null,
+      frontWithShirt: previewSlotEnabled('front-with-shirt') ? results['front-with-shirt']?.url ?? null : null,
       frontWithoutShirt: results['front-without-shirt']?.url ?? null,
-      backWithShirt: results['back-with-shirt']?.url ?? null,
+      backWithShirt: previewSlotEnabled('back-with-shirt') ? results['back-with-shirt']?.url ?? null : null,
       backWithoutShirt: results['back-without-shirt']?.url ?? null,
     };
   }
