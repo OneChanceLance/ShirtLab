@@ -72,10 +72,10 @@
   import ViewPort from '../../components/shirtlab/Viewports/ViewPort.vue';
   import type { TextObject, ImageObject, ElementType, ElementVariant } from './types'
   // ADD with the other imports
-  import { withDefaults, getEffectTransform, getEffectAdvance, applyToContext } from '../sideMenu/types/effectsList';
+  import { withDefaults, getEffectTransform, applyToContext } from '../sideMenu/types/effectsList';
   import { getAABB, getAABBCorners, getRotatedCorners, pointInRotatedRect } from './utils/geometry';
   import { useDesignLayers } from './composables/useDesignLayers';
-  import { createGridState, hydrateSizeMeasurements, type DesignGrid, type View } from './composables/useGrid';
+  import { createGridState, type DesignGrid, type View } from './composables/useGrid';
   import { useCheckoutStore } from '../../stores/checkout';
   import type {
     SerializedDesignState,
@@ -94,130 +94,6 @@
 
 
   import { describePreviewSource, normalizePreview } from '../../utils/previewPipeline';
-
-  // ===== High‑res + 72‑dpi pipeline (single source of truth) =====
-  // We build the *master* from the existing hi‑res data URL, then derive a 72‑dpi
-  // preview from that *same* pixels, so they always match.
-
-  async function blobToDataUrl(blob: Blob): Promise<string> {
-    return await new Promise<string>((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onerror = () => reject(fr.error);
-      fr.onload = () => resolve(String(fr.result));
-      fr.readAsDataURL(blob);
-    });
-  }
-
-  async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-    const [head, b64] = dataUrl.split(',');
-    const mime = /data:(.*?);base64/.exec(head)?.[1] || 'application/octet-stream';
-    const bin = atob(b64);
-    const len = bin.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
-    return new Blob([bytes], { type: mime });
-  }
-
-  async function stampDpiOnBlob(blob: Blob, dpi: number): Promise<Blob> {
-    try {
-      const asData = await blobToDataUrl(blob);
-      const stamped = changeDpiDataUrl(asData, dpi);
-      return await dataUrlToBlob(stamped);
-    } catch {
-      // If stamping fails, return original
-      return blob;
-    }
-  }
-
-  async function downscaleBlobPng(sourceBlob: Blob, scale: number): Promise<Blob> {
-    // scale is e.g. 72/300
-    const bmp = await createImageBitmap(sourceBlob);
-    const targetW = Math.max(1, Math.round(bmp.width * scale));
-    const targetH = Math.max(1, Math.round(bmp.height * scale));
-
-    let cvs: HTMLCanvasElement | OffscreenCanvas;
-    if (typeof OffscreenCanvas !== 'undefined') {
-      cvs = new OffscreenCanvas(targetW, targetH);
-      const ctx = (cvs as OffscreenCanvas).getContext('2d')!;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high' as any;
-      ctx.drawImage(bmp, 0, 0, targetW, targetH);
-      return await (cvs as OffscreenCanvas).convertToBlob({ type: 'image/png' });
-    } else {
-      const c = document.createElement('canvas');
-      c.width = targetW; c.height = targetH;
-      const ctx = c.getContext('2d')!;
-      ctx.imageSmoothingEnabled = true;
-      (ctx as any).imageSmoothingQuality = 'high';
-      ctx.drawImage(bmp, 0, 0, targetW, targetH);
-      const blob = await new Promise<Blob>((resolve) => c.toBlob(b => resolve(b!), 'image/png'));
-      return blob;
-    }
-  }
-
-  /**
-   * Produce a 300‑dpi master PNG *and* a 72‑dpi preview from the same pixels.
-   * Does not upload — returns blobs + object URLs so callers can store/upload.
-   */
-  async function buildMasterAndPreview(view: View): Promise<{
-    masterBlob: Blob;            // PNG, 300 dpi
-    masterUrl: string;           // object URL (caller should revoke when done)
-    previewBlob: Blob;           // PNG, 72 dpi (downscaled from master)
-    previewUrl: string;          // object URL (caller should revoke when done)
-    meta: { width: number; height: number; dpiMaster: number; dpiPreview: number; };
-  } | null> {
-    const channel = viewPreviewChannels[view];
-    // Prefer the actual hi‑res if available; fall back to display/canvas
-    const src = normalizePreview(channel.hiResRef.value || channel.displayRef.value || channel.canvasRef.value);
-    if (!src) {
-      console.warn('[ShirtPlacer] buildMasterAndPreview: no source available for', view);
-      return null;
-    }
-
-    let masterBlobRaw: Blob | null = null;
-
-    if (src.startsWith('data:')) {
-      // Already a data URL — ensure 300 dpi stamp and keep pixels intact
-      const stamped = changeDpiDataUrl(src, 300);
-      masterBlobRaw = await dataUrlToBlob(stamped);
-    } else if (src.startsWith('blob:') || src.startsWith('http')) {
-      try {
-        const resp = await fetch(src, { mode: 'cors' });
-        masterBlobRaw = await resp.blob();
-      } catch (e) {
-        console.warn('[ShirtPlacer] buildMasterAndPreview: fetch failed, falling back to displayRef', e);
-        return null;
-      }
-      masterBlobRaw = await stampDpiOnBlob(masterBlobRaw, 300);
-    }
-
-    if (!masterBlobRaw) return null;
-
-    // Derive preview by inch-accurate scale (72/300), then stamp 72 dpi
-    const scale = 72 / 300;
-    const previewBlobRaw = await downscaleBlobPng(masterBlobRaw, scale);
-    const previewBlob = await stampDpiOnBlob(previewBlobRaw, 72);
-
-    // Finalize master (may already be stamped)
-    const masterBlob = await stampDpiOnBlob(masterBlobRaw, 300);
-
-    // Object URLs for immediate UI use (remember to revoke later)
-    const masterUrl = URL.createObjectURL(masterBlob);
-    const previewUrl = URL.createObjectURL(previewBlob);
-
-    // Expose dimensions from master
-    const bmp = await createImageBitmap(masterBlob);
-    const width = bmp.width;
-    const height = bmp.height;
-
-    return {
-      masterBlob,
-      masterUrl,
-      previewBlob,
-      previewUrl,
-      meta: { width, height, dpiMaster: 300, dpiPreview: 72 },
-    };
-  }
 
   // -----------------------------------------------------
   // Local utility shims (fix TS/undefined errors, safe defaults)
@@ -292,7 +168,7 @@
   });
 
   const coverageBounds = ref<{ x: number; y: number; w: number; h: number } | null>(null);
-  const generateHighResPreviews = ref(true);
+  const generateHighResPreviews = ref(false); // keep live UI light; export path still builds hi‑res
   let previewRefreshTimeout: ReturnType<typeof setTimeout> | null = null;
   const coverageOverlayStyle = computed(() => {
     const bounds = coverageBounds.value;
@@ -305,7 +181,7 @@
     };
   });
   const DEFAULT_PIXELS_PER_INCH = 72;
-  const LIVE_CANVAS_TARGET_PPI = 300;
+  const LIVE_CANVAS_TARGET_PPI = DEFAULT_PIXELS_PER_INCH; // interactive canvas stays at display PPI
   const RENDER_SCALE = Math.max(1, LIVE_CANVAS_TARGET_PPI / DEFAULT_PIXELS_PER_INCH);
 
   interface InspectorItem {
@@ -1054,7 +930,7 @@
   const shirtBgLoaded = ref(false);
   const shirtBgError = ref<string | null>(null);
   const shirtBgMirrored = ref(false);
-  const shirtBg = new window.Image();
+  const shirtBg = new Image();
   shirtBg.crossOrigin = 'anonymous';
 
   /**
@@ -1406,17 +1282,85 @@
     });
   }
 
+  const PREVIEW_REFRESH_DEBOUNCE_MS = 120;
+  const BLANK_HYDRATION_DEBOUNCE_MS = 90;
+  const DESIGN_CACHE_SYNC_DEBOUNCE_MS = 80;
+
+  const previewRefreshTimers: Record<View, ReturnType<typeof setTimeout> | null> = {
+    Front: null,
+    Back: null,
+  };
+  const designCacheSyncTimers: Record<View, ReturnType<typeof setTimeout> | null> = {
+    Front: null,
+    Back: null,
+  };
+  const blankHydrationTimers: Record<View, ReturnType<typeof setTimeout> | null> = {
+    Front: null,
+    Back: null,
+  };
+  const latestDesignCacheRefs: Record<View, string | null> = {
+    Front: null,
+    Back: null,
+  };
+  const latestBlankHydrationArgs: Record<View, {
+    cacheRef: string | null | undefined;
+    canvas: string | null | undefined;
+    data: string | null | undefined;
+  } | null> = {
+    Front: null,
+    Back: null,
+  };
+
+  function scheduleCheckoutPreviewRefresh(view: View) {
+    if (previewRefreshTimers[view]) {
+      clearTimeout(previewRefreshTimers[view]!);
+    }
+    previewRefreshTimers[view] = setTimeout(() => {
+      previewRefreshTimers[view] = null;
+      refreshCheckoutDesignPreview(view, 'design-preview-change');
+    }, PREVIEW_REFRESH_DEBOUNCE_MS);
+  }
+
+  function applyDesignCacheRef(view: View) {
+    const refValue = latestDesignCacheRefs[view];
+    previewDebug(view, 'store design cache ref applied', { refValue });
+    const resolvedRef = refValue && isCachedAssetRef(refValue) ? refValue : null;
+    if (view === 'Front') {
+      frontDesignCacheRef.value = resolvedRef;
+    } else {
+      backDesignCacheRef.value = resolvedRef;
+    }
+    void hydrateDesignCacheForView(view, resolvedRef);
+  }
+
+  function scheduleDesignCacheSync(view: View) {
+    if (designCacheSyncTimers[view]) {
+      clearTimeout(designCacheSyncTimers[view]!);
+    }
+    designCacheSyncTimers[view] = setTimeout(() => {
+      designCacheSyncTimers[view] = null;
+      applyDesignCacheRef(view);
+    }, DESIGN_CACHE_SYNC_DEBOUNCE_MS);
+  }
+
+  function scheduleBlankHydration(view: View) {
+    if (blankHydrationTimers[view]) {
+      clearTimeout(blankHydrationTimers[view]!);
+    }
+    blankHydrationTimers[view] = setTimeout(() => {
+      blankHydrationTimers[view] = null;
+      const args = latestBlankHydrationArgs[view];
+      if (!args) return;
+      void hydrateBlankPreview(view, args.cacheRef ?? null, args.canvas ?? null, args.data ?? null);
+    }, BLANK_HYDRATION_DEBOUNCE_MS);
+  }
+
   watch(
     () => checkoutStore.designPreviewCacheRefs.Front,
     (refValue) => {
       previewDebug('Front', 'store design cache ref changed', { refValue });
-      if (refValue && isCachedAssetRef(refValue)) {
-        frontDesignCacheRef.value = refValue;
-        void hydrateDesignCacheForView('Front', refValue);
-      } else {
-        frontDesignCacheRef.value = null;
-        void hydrateDesignCacheForView('Front', null);
-      }
+      latestDesignCacheRefs.Front = refValue ?? null;
+      scheduleDesignCacheSync('Front');
     },
     { immediate: true },
   );
@@ -1425,13 +1369,8 @@
     () => checkoutStore.designPreviewCacheRefs.Back,
     (refValue) => {
       previewDebug('Back', 'store design cache ref changed', { refValue });
-      if (refValue && isCachedAssetRef(refValue)) {
-        backDesignCacheRef.value = refValue;
-        void hydrateDesignCacheForView('Back', refValue);
-      } else {
-        backDesignCacheRef.value = null;
-        void hydrateDesignCacheForView('Back', null);
-      }
+      latestDesignCacheRefs.Back = refValue ?? null;
+      scheduleDesignCacheSync('Back');
     },
     { immediate: true },
   );
@@ -1467,12 +1406,11 @@
     }
     checkoutStore.setBlankDesignPreview(view, resolved);
   }
-  // Always provide a visible URL to the checkout store:
-  // priority: cached (hydrated) → canvas preview → raw data:url
   watch(
     [() => checkoutStore.blankDesignCacheRefs.Front, frontCanvasPreview, frontBlankPreview],
     ([refValue, canvasUrl, dataUrl]) => {
-      void hydrateBlankPreview('Front', refValue, canvasUrl, dataUrl);
+      latestBlankHydrationArgs.Front = { cacheRef: refValue, canvas: canvasUrl, data: dataUrl };
+      scheduleBlankHydration('Front');
     },
     { immediate: true },
   );
@@ -1480,14 +1418,15 @@
   watch(
     [() => checkoutStore.blankDesignCacheRefs.Back, backCanvasPreview, backBlankPreview],
     ([refValue, canvasUrl, dataUrl]) => {
-      void hydrateBlankPreview('Back', refValue, canvasUrl, dataUrl);
+      latestBlankHydrationArgs.Back = { cacheRef: refValue, canvas: canvasUrl, data: dataUrl };
+      scheduleBlankHydration('Back');
     },
     { immediate: true },
   );
   watch(
     [frontDesignHiRes, frontPreview],
     () => {
-      refreshCheckoutDesignPreview('Front', 'design-preview-change');
+      scheduleCheckoutPreviewRefresh('Front');
     },
     { immediate: true },
   );
@@ -1495,7 +1434,7 @@
   watch(
     [backDesignHiRes, backPreview],
     () => {
-      refreshCheckoutDesignPreview('Back', 'design-preview-change');
+      scheduleCheckoutPreviewRefresh('Back');
     },
     { immediate: true },
   );
@@ -1832,7 +1771,8 @@
     }
 
     storeViewState(view);
-    const EXPORT_DESIGN_PPI = 300;
+    const DESIGN_ONLY_EXPORT_PPI = 300;
+    const WITH_SHIRT_EXPORT_PPI = 72;
     const gridRect = resolveGrid();
     const gridDetails = clothingDetails.value.grid ?? {};
     const gridPpi = getPixelsPerInch();
@@ -1847,8 +1787,8 @@
     const gridHeightInches = rawGridHeightInches && rawGridHeightInches > 0
       ? rawGridHeightInches
       : gridHeightPx / Math.max(effectivePpi, 1);
-    const targetGridWidthPx = Math.max(1, Math.round(gridWidthInches * EXPORT_DESIGN_PPI));
-    const targetGridHeightPx = Math.max(1, Math.round(gridHeightInches * EXPORT_DESIGN_PPI));
+    const targetGridWidthPx = Math.max(1, Math.round(gridWidthInches * DESIGN_ONLY_EXPORT_PPI));
+    const targetGridHeightPx = Math.max(1, Math.round(gridHeightInches * DESIGN_ONLY_EXPORT_PPI));
     const MAX_EXPORT_SCALE = 20;
     const scaleX = targetGridWidthPx / gridWidthPx;
     const scaleY = targetGridHeightPx / gridHeightPx;
@@ -1978,6 +1918,7 @@
       width: number;
       height: number;
       isHighRes: boolean;
+      dpi: number;
     };
 
     // Ensure all image elements are loaded before capturing a design-only layer
@@ -2026,9 +1967,9 @@
       return canvas;
     };
 
-    const MIN_DESIGN_ONLY_LONG_SIDE_PX = 5800;
-    const MIN_WITH_SHIRT_LONG_SIDE_PX = 4800;
-    const MAX_EXPORT_LONG_SIDE_PX = 9000;
+    const MIN_DESIGN_ONLY_LONG_SIDE_PX = 4800; // ~16" @300dpi or 12x16 layouts
+    const MIN_WITH_SHIRT_LONG_SIDE_PX = 2400; // background composites don’t need extreme resolution
+    const MAX_EXPORT_LONG_SIDE_PX = 7000; // cap to prevent runaway memory
 
     const ensureMinimumResolution = (
       source: HTMLCanvasElement,
@@ -2057,6 +1998,7 @@
       cropMode: CropMode,
     ): RenderResult | null => {
       const shouldHighRes = generateHighResPreviews.value;
+      const exportDpi = includeBackground ? WITH_SHIRT_EXPORT_PPI : DESIGN_ONLY_EXPORT_PPI;
       if (shouldHighRes) {
         const exportCanvas = document.createElement('canvas');
         exportCanvas.width = Math.max(1, Math.round(canvasWidth * exportScale));
@@ -2073,13 +2015,14 @@
             const minSide = includeBackground ? MIN_WITH_SHIRT_LONG_SIDE_PX : MIN_DESIGN_ONLY_LONG_SIDE_PX;
             sourceCanvas = ensureMinimumResolution(sourceCanvas, minSide);
           }
-          const dataUrl = applyDpi(sourceCanvas.toDataURL('image/png'), EXPORT_DESIGN_PPI) ?? sourceCanvas.toDataURL('image/png');
+          const dataUrl = applyDpi(sourceCanvas.toDataURL('image/png'), exportDpi) ?? sourceCanvas.toDataURL('image/png');
           return {
             canvas: sourceCanvas,
             dataUrl,
             width: sourceCanvas.width,
             height: sourceCanvas.height,
             isHighRes: true,
+            dpi: exportDpi,
           };
         }
       }
@@ -2096,13 +2039,14 @@
         const minSide = includeBackground ? MIN_WITH_SHIRT_LONG_SIDE_PX : MIN_DESIGN_ONLY_LONG_SIDE_PX;
         sourceCanvas = ensureMinimumResolution(sourceCanvas, minSide);
       }
-      const dataUrl = applyDpi(sourceCanvas.toDataURL('image/png'), EXPORT_DESIGN_PPI) ?? sourceCanvas.toDataURL('image/png');
+      const dataUrl = applyDpi(sourceCanvas.toDataURL('image/png'), exportDpi) ?? sourceCanvas.toDataURL('image/png');
       return {
         canvas: sourceCanvas,
         dataUrl,
         width: sourceCanvas.width,
         height: sourceCanvas.height,
         isHighRes: false,
+        dpi: exportDpi,
       };
     };
 
@@ -2213,7 +2157,13 @@
         return Promise.resolve(canvasToDataUrl(layer.canvas));
       }
 
-      const scale = DISPLAY_PREVIEW_PPI / EXPORT_DESIGN_PPI;
+      const actualDpi = layer.dpi || DISPLAY_PREVIEW_PPI;
+      const scale = actualDpi > DISPLAY_PREVIEW_PPI
+        ? (DISPLAY_PREVIEW_PPI / actualDpi)
+        : 1;
+      if (scale >= 1) {
+        return Promise.resolve(canvasToDataUrl(layer.canvas));
+      }
       const displayCanvas = document.createElement('canvas');
       displayCanvas.width = Math.max(1, Math.round(layer.width * scale));
       displayCanvas.height = Math.max(1, Math.round(layer.height * scale));
@@ -2247,7 +2197,7 @@
         designOnlyWidth = artLayer.width;
         designOnlyHeight = artLayer.height;
         designOnlyDisplayUrl = await createDisplayUrl(artLayer) ?? artLayer.dataUrl;
-        designOnlyExportUrl = applyDpi(artLayer.dataUrl, EXPORT_DESIGN_PPI) ?? artLayer.dataUrl;
+        designOnlyExportUrl = applyDpi(artLayer.dataUrl, DESIGN_ONLY_EXPORT_PPI) ?? artLayer.dataUrl;
         try {
           designOnlyCacheRef = await storeDataUrlInCache(designOnlyExportUrl, `${view.toLowerCase()}-design-only`);
         } catch (error) {
@@ -2271,7 +2221,7 @@
           label: 'With shirt',
           width: designLayer?.width ?? null,
           height: designLayer?.height ?? null,
-          dpi: EXPORT_DESIGN_PPI,
+          dpi: WITH_SHIRT_EXPORT_PPI,
           dataUrl: designHiResUrl ?? designDisplayUrl,
         });
         logImageInfo({
@@ -2279,7 +2229,7 @@
           label: 'Design only',
           width: designOnlyWidth,
           height: designOnlyHeight,
-          dpi: EXPORT_DESIGN_PPI,
+          dpi: DESIGN_ONLY_EXPORT_PPI,
           dataUrl: designOnlyExportUrl,
         });
         return;
@@ -2296,7 +2246,7 @@
           fallbackWidth = fallbackLayer.width;
           fallbackHeight = fallbackLayer.height;
           fallbackDesignDisplay = await createDisplayUrl(fallbackLayer) ?? fallbackLayer.dataUrl;
-          fallbackDesignExport = applyDpi(fallbackLayer.dataUrl, EXPORT_DESIGN_PPI) ?? fallbackLayer.dataUrl;
+          fallbackDesignExport = applyDpi(fallbackLayer.dataUrl, DESIGN_ONLY_EXPORT_PPI) ?? fallbackLayer.dataUrl;
           try {
             const storedFallback = await storeDataUrlInCache(fallbackDesignExport, `${view.toLowerCase()}-design-only`);
             if (storedFallback) {
@@ -2321,7 +2271,7 @@
           label: 'With shirt (fallback)',
           width: fallbackLayer.width,
           height: fallbackLayer.height,
-          dpi: EXPORT_DESIGN_PPI,
+          dpi: DESIGN_ONLY_EXPORT_PPI,
           dataUrl: fallbackLayer.dataUrl,
         });
         logImageInfo({
@@ -2329,7 +2279,7 @@
           label: 'Design only (fallback)',
           width: fallbackWidth,
           height: fallbackHeight,
-          dpi: EXPORT_DESIGN_PPI,
+          dpi: DESIGN_ONLY_EXPORT_PPI,
           dataUrl: fallbackDesignExport,
         });
       }
@@ -3648,85 +3598,64 @@
    * Applies a new garment definition and refreshes dependent state (grid, previews, bg).
    */
   function updateClothing(details: any) {
-    if (!details) return;
-
-    const colorsArray = Array.isArray(details.colors) ? details.colors : [];
-    const primaryColor = colorsArray[0] ?? {};
-    const bg = typeof primaryColor?.background === 'string' ? primaryColor.background : undefined;
-    const backgroundChange = Boolean(details.front || details.back || bg);
-    const incomingGrid = details.grid as DesignGrid | undefined;
-
-    if (incomingGrid) {
-      const mergedGrid = {
-        ...DEFAULT_GRID,
-        ...incomingGrid,
-      } as DesignGrid;
-      clothingDetails.value.grid = { ...mergedGrid };
-      viewGridState.Front = { ...mergedGrid };
-      viewGridState.Back = { ...mergedGrid };
-      viewGridInitialized.Front = true;
-      viewGridInitialized.Back = true;
-    } else {
-      const currentGrid = resolveGrid();
-      viewGridState.Front = { ...currentGrid };
-      viewGridState.Back = { ...currentGrid };
-    }
-
-    if (!incomingGrid) {
-      requestAutoGrid(!backgroundChange);
-    }
-
-    if (Object.prototype.hasOwnProperty.call(details, 'sizeMeasurements')) {
-      clothingDetails.value.sizeMeasurements = hydrateSizeMeasurements(details.sizeMeasurements);
-    }
-
-    if (Object.prototype.hasOwnProperty.call(details, 'size')) {
-      clothingDetails.value.size = typeof details.size === 'string' ? details.size : '';
-    }
-
-    const assignableKeys: Array<keyof typeof clothingDetails.value> = ['name', 'image', 'style', 'gender'];
-    for (const key of assignableKeys) {
-      if (Object.prototype.hasOwnProperty.call(details, key) && details[key] !== undefined) {
-        (clothingDetails.value as any)[key] = details[key];
+    try {
+      // 1) update garment image sources
+      if (details?.front || details?.back || details?.colors) {
+        viewToSrc.Front =
+          details.front ||
+          details.colors?.[0]?.background ||
+          viewToSrc.Front ||
+          '';
+        viewToSrc.Back =
+          details.back ||
+          details.front ||
+          details.colors?.[0]?.background ||
+          viewToSrc.Back ||
+          '';
       }
-    }
 
-    if (backgroundChange) {
-      if (details.front) viewToSrc.Front = details.front;
-      if (details.back) {
-        viewToSrc.Back = details.back;
-      } else if (details.front) {
-        viewToSrc.Back = details.front;
+      // 2) safely merge grid (no external hydrator)
+      const nextGridRaw = details?.grid && typeof details.grid === 'object' ? details.grid : null;
+      if (nextGridRaw) {
+        const cur = resolveGrid();
+        const g = nextGridRaw as Partial<DesignGrid> & Record<string, any>;
+        clothingDetails.value.grid = {
+          ...cur,
+          x: Number.isFinite(Number(g.x)) ? Number(g.x) : cur.x,
+          y: Number.isFinite(Number(g.y)) ? Number(g.y) : cur.y,
+          w: Number.isFinite(Number(g.w)) ? Number(g.w) : cur.w,
+          h: Number.isFinite(Number(g.h)) ? Number(g.h) : cur.h,
+          widthInches:
+            (Number.isFinite(Number(g.widthInches)) ? Number(g.widthInches) : null) ??
+            (Number.isFinite(Number((g as any).width_in)) ? Number((g as any).width_in) : null) ??
+            (cur.widthInches ?? null),
+          heightInches:
+            (Number.isFinite(Number(g.heightInches)) ? Number(g.heightInches) : null) ??
+            (Number.isFinite(Number((g as any).height_in)) ? Number((g as any).height_in) : null) ??
+            (cur.heightInches ?? null),
+          dpi:
+            (Number.isFinite(Number(g.dpi)) ? Number(g.dpi) : null) ??
+            (Number.isFinite(Number((g as any).pxPerInch)) ? Number((g as any).pxPerInch) : null) ??
+            (Number.isFinite(Number((g as any).pixelsPerInch)) ? Number((g as any).pixelsPerInch) : null) ??
+            (cur.dpi ?? null),
+          auto: (g as any).auto ?? cur.auto ?? null,
+          autoGenerated: (g as any).autoGenerated ?? cur.autoGenerated ?? null,
+        } as any;
       }
-      if (!details.front && !details.back && bg) {
-        viewToSrc.Front = bg;
-        viewToSrc.Back = bg;
-      }
+
+      // 3) push to store (pricing/coverage depend on this)
+      syncGridToCheckoutStore(clothingDetails.value.grid as DesignGrid);
+
+      // 4) refresh background + kick auto-grid + redraw
+      setShirtBackground(
+        viewToSrc[selectedView.value] || viewToSrc.Front || '',
+        { mirror: viewMirrored[selectedView.value] }
+      );
+      requestAutoGrid(true);
+      draw();
+    } catch (e) {
+      console.warn('[ShirtPlacer] updateClothing failed', e);
     }
-
-    if (!backgroundChange && bg) {
-      viewToSrc.Front = viewToSrc.Front || bg;
-      viewToSrc.Back = viewToSrc.Back || bg;
-    }
-
-    if (!viewToSrc.Back) {
-      viewToSrc.Back = viewToSrc.Front || '';
-    }
-
-    viewMirrored.Front = false;
-    viewMirrored.Back = false;
-
-    refreshAllPreviews();
-
-    if (details.bgTransform) {
-      setBackgroundTransform(details.bgTransform);
-    }
-
-    requestMeasurementRefresh();
-
-    resetDesignState('Front');
-    setShirtBackground(viewToSrc.Front || viewToSrc.Back || '', { mirror: viewMirrored.Front });
-    draw();
   }
 
   /**
