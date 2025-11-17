@@ -33,3 +33,55 @@ export async function uploadBlobToFirebase(
     return null;
   }
 }
+
+export async function upscalePngBlobForUpload(
+  blob: Blob,
+  minLongSidePx = 5000, // pick your poison: 4500–7000 ish
+): Promise<Blob> {
+  // If it's not PNG, just bail – don't try to upscale JPEG/SVG/etc
+  const type = (blob.type || '').toLowerCase();
+  if (!type.includes('png')) return blob;
+
+  const imgUrl = URL.createObjectURL(blob);
+
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = (e) => reject(e);
+      image.src = imgUrl;
+    });
+
+    const longest = Math.max(img.width, img.height);
+    if (!longest || longest >= minLongSidePx) {
+      // already big enough
+      return blob;
+    }
+
+    const scale = minLongSidePx / longest;
+    const targetWidth = Math.round(img.width * scale);
+    const targetHeight = Math.round(img.height * scale);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return blob;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((scaled) => {
+        if (!scaled) {
+          resolve(blob);
+          return;
+        }
+        resolve(scaled);
+      }, 'image/png', 1.0);
+    });
+  } finally {
+    URL.revokeObjectURL(imgUrl);
+  }
+}

@@ -62,8 +62,7 @@
 
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, watch, ref, reactive } from 'vue';
-  import { changeDpiDataUrl } from 'changedpi';
-
+  import { changeDpiDataUrl, changeDpiBlob } from 'changedpi';
   import DeleteIcon from 'vue-material-design-icons/Close.vue'
   import DuplicateIcon from 'vue-material-design-icons/ContentDuplicate.vue'
   import ResizeIcon from 'vue-material-design-icons/CropFree.vue'
@@ -94,6 +93,7 @@
 
 
   import { describePreviewSource, normalizePreview } from '../../utils/previewPipeline';
+  import { uploadBytes } from 'firebase/storage';
 
   // -----------------------------------------------------
   // Local utility shims (fix TS/undefined errors, safe defaults)
@@ -180,9 +180,10 @@
       height: `${Math.round(bounds.h)}px`,
     };
   });
-  const DEFAULT_PIXELS_PER_INCH = 72;
-  const LIVE_CANVAS_TARGET_PPI = DEFAULT_PIXELS_PER_INCH; // interactive canvas stays at display PPI
-  const RENDER_SCALE = Math.max(1, LIVE_CANVAS_TARGET_PPI / DEFAULT_PIXELS_PER_INCH);
+  const DEFAULT_PIXELS_PER_INCH = 300;
+  // Keep the interactive canvas light; high‑res is generated only on export.
+  const LIVE_CANVAS_TARGET_PPI = 300;
+  const RENDER_SCALE = Math.max(5, LIVE_CANVAS_TARGET_PPI / DEFAULT_PIXELS_PER_INCH);
 
   interface InspectorItem {
     id: string;
@@ -1024,7 +1025,7 @@
   };
   const frontDisplayObjectUrl = ref<string | null>(null);
   const backDisplayObjectUrl = ref<string | null>(null);
-  const CACHE_PURGE_ENABLED = false;
+  const CACHE_PURGE_ENABLED = true;
 
   function pruneCachedAsset(ref: CachedAssetRef | null) {
     if (!CACHE_PURGE_ENABLED || !ref) return;
@@ -1789,7 +1790,7 @@
       : gridHeightPx / Math.max(effectivePpi, 1);
     const targetGridWidthPx = Math.max(1, Math.round(gridWidthInches * DESIGN_ONLY_EXPORT_PPI));
     const targetGridHeightPx = Math.max(1, Math.round(gridHeightInches * DESIGN_ONLY_EXPORT_PPI));
-    const MAX_EXPORT_SCALE = 20;
+    const MAX_EXPORT_SCALE = 200;
     const scaleX = targetGridWidthPx / gridWidthPx;
     const scaleY = targetGridHeightPx / gridHeightPx;
     const exportScale = Math.max(1, Math.min(Math.max(scaleX, scaleY), MAX_EXPORT_SCALE));
@@ -1914,7 +1915,7 @@
 
     type RenderResult = {
       canvas: HTMLCanvasElement;
-      dataUrl: string;
+      dataUrl: string | null;
       width: number;
       height: number;
       isHighRes: boolean;
@@ -1967,14 +1968,17 @@
       return canvas;
     };
 
-    const MIN_DESIGN_ONLY_LONG_SIDE_PX = 4800; // ~16" @300dpi or 12x16 layouts
-    const MIN_WITH_SHIRT_LONG_SIDE_PX = 2400; // background composites don’t need extreme resolution
+    // Export canvases are already sized from grid inches × 300 DPI.
+    // Avoid aggressively upscaling beyond that – it softens details.
+    const MIN_DESIGN_ONLY_LONG_SIDE_PX = 0; // no forced upscale for design‑only exports
+    const MIN_WITH_SHIRT_LONG_SIDE_PX = 0;  // no forced upscale for shirt composites
     const MAX_EXPORT_LONG_SIDE_PX = 7000; // cap to prevent runaway memory
 
     const ensureMinimumResolution = (
       source: HTMLCanvasElement,
       minLongSide: number,
     ): HTMLCanvasElement => {
+      if (!minLongSide || minLongSide <= 0) return source;
       const longestSide = Math.max(source.width, source.height);
       if (longestSide >= minLongSide) return source;
       const targetLongSide = Math.min(minLongSide, MAX_EXPORT_LONG_SIDE_PX);
@@ -1992,30 +1996,86 @@
       ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
       return scaled;
     };
+    const canvasToPngDataUrl = (canvas: HTMLCanvasElement): Promise<string | null> =>
+      new Promise((resolve) => {
+        try {
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                resolve(null);
+                return;
+              }
 
-    const renderLayer = (
+              // Stamp PNG to 300 DPI using changedpi's changeDpiBlob
+              changeDpiBlob(blob, 300)
+                .then((stampedBlob) => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    resolve(typeof reader.result === 'string' ? reader.result : null);
+                  };
+                  reader.onerror = () => {
+                    console.warn('[ShirtPlacer] Failed to read canvas blob as data URL');
+                    resolve(null);
+                  };
+                  reader.readAsDataURL(stampedBlob);
+                })
+                .catch((error) => {
+                  console.warn('[ShirtPlacer] changeDpiBlob failed, falling back to original blob', error);
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    resolve(typeof reader.result === 'string' ? reader.result : null);
+                  };
+                  reader.onerror = () => {
+                    console.warn('[ShirtPlacer] Failed to read canvas blob as data URL');
+                    resolve(null);
+                  };
+                  reader.readAsDataURL(blob);
+                });
+            },
+            'image/png',
+            1.0,
+          );
+        } catch (error) {
+          console.warn('[ShirtPlacer] canvas.toBlob failed, falling back to toDataURL', error);
+          try {
+            resolve(canvas.toDataURL('image/png'));
+          } catch {
+            resolve(null);
+          }
+        }
+      });
+    const renderLayer = async (
       includeBackground: boolean,
       cropMode: CropMode,
-    ): RenderResult | null => {
-      const shouldHighRes = generateHighResPreviews.value;
+      scaleOverride?: number,
+    ): Promise<RenderResult | null> => {
+      const shouldHighResFlag = generateHighResPreviews.value;
       const exportDpi = includeBackground ? WITH_SHIRT_EXPORT_PPI : DESIGN_ONLY_EXPORT_PPI;
-      if (shouldHighRes) {
+
+      // If a scaleOverride is provided, use it. Otherwise fall back to the old behavior:
+      // high-res uses exportScale, low-res uses 1x.
+      const scale =
+        typeof scaleOverride === 'number' && scaleOverride > 0
+          ? scaleOverride
+          : (shouldHighResFlag ? exportScale : 1);
+
+      // High-res path: render at scaled resolution (no extra downscale after crop).
+      if (scale > 1) {
         const exportCanvas = document.createElement('canvas');
-        exportCanvas.width = Math.max(1, Math.round(canvasWidth * exportScale));
-        exportCanvas.height = Math.max(1, Math.round(canvasHeight * exportScale));
+        exportCanvas.width = Math.max(1, Math.round(canvasWidth * scale));
+        exportCanvas.height = Math.max(1, Math.round(canvasHeight * scale));
         const exportCtx = exportCanvas.getContext('2d');
         if (exportCtx) {
           exportCtx.imageSmoothingEnabled = true;
           exportCtx.imageSmoothingQuality = 'high';
-          exportCtx.scale(exportScale, exportScale);
+          exportCtx.scale(scale, scale);
           exportCtx.clearRect(0, 0, canvasWidth, canvasHeight);
           buildFull(exportCtx, includeBackground, includeBackground ? { fillColor: '#ffffff' } : { fillColor: null });
-          let sourceCanvas = applyCropStrategy(exportCanvas, exportScale, cropMode);
-          if (shouldHighRes) {
-            const minSide = includeBackground ? MIN_WITH_SHIRT_LONG_SIDE_PX : MIN_DESIGN_ONLY_LONG_SIDE_PX;
-            sourceCanvas = ensureMinimumResolution(sourceCanvas, minSide);
-          }
-          const dataUrl = applyDpi(sourceCanvas.toDataURL('image/png'), exportDpi) ?? sourceCanvas.toDataURL('image/png');
+
+          // Crop in the same scaled coordinate space; do NOT downscale afterward.
+          const sourceCanvas = applyCropStrategy(exportCanvas, scale, cropMode);
+          const rawDataUrl = await canvasToPngDataUrl(sourceCanvas);
+          const dataUrl = applyDpi(rawDataUrl, exportDpi) ?? rawDataUrl;
           return {
             canvas: sourceCanvas,
             dataUrl,
@@ -2027,19 +2087,17 @@
         }
       }
 
+      // Low-res path: 1x canvasWidth/canvasHeight, used for cheap UI previews.
       const previewCanvas = document.createElement('canvas');
       previewCanvas.width = canvasWidth;
       previewCanvas.height = canvasHeight;
       const previewCtx = previewCanvas.getContext('2d');
-      if (!previewCtx) return null;
+      if (!previewCtx) return Promise.resolve(null);
       previewCtx.clearRect(0, 0, canvasWidth, canvasHeight);
       buildFull(previewCtx, includeBackground, includeBackground ? { fillColor: '#ffffff' } : { fillColor: null });
-      let sourceCanvas = applyCropStrategy(previewCanvas, 1, cropMode);
-      if (shouldHighRes) {
-        const minSide = includeBackground ? MIN_WITH_SHIRT_LONG_SIDE_PX : MIN_DESIGN_ONLY_LONG_SIDE_PX;
-        sourceCanvas = ensureMinimumResolution(sourceCanvas, minSide);
-      }
-      const dataUrl = applyDpi(sourceCanvas.toDataURL('image/png'), exportDpi) ?? sourceCanvas.toDataURL('image/png');
+      const sourceCanvas = applyCropStrategy(previewCanvas, 1, cropMode);
+      const rawDataUrl = await canvasToPngDataUrl(sourceCanvas);
+      const dataUrl = applyDpi(rawDataUrl, exportDpi) ?? rawDataUrl;
       return {
         canvas: sourceCanvas,
         dataUrl,
@@ -2142,47 +2200,16 @@
 
     const createDisplayUrl = (layer: RenderResult | null): Promise<string | null> => {
       if (!layer) return Promise.resolve(null);
-      if (!layer.canvas) return Promise.resolve(layer.dataUrl);
-
-      const canvasToDataUrl = (canvas: HTMLCanvasElement): string | null => {
-        try {
-          return canvas.toDataURL('image/png');
-        } catch (error) {
-          console.warn('[ShirtPlacer] Failed to convert canvas to data URL', error);
-          return null;
-        }
-      };
-
-      if (!layer.isHighRes) {
-        return Promise.resolve(canvasToDataUrl(layer.canvas));
-      }
-
-      const actualDpi = layer.dpi || DISPLAY_PREVIEW_PPI;
-      const scale = actualDpi > DISPLAY_PREVIEW_PPI
-        ? (DISPLAY_PREVIEW_PPI / actualDpi)
-        : 1;
-      if (scale >= 1) {
-        return Promise.resolve(canvasToDataUrl(layer.canvas));
-      }
-      const displayCanvas = document.createElement('canvas');
-      displayCanvas.width = Math.max(1, Math.round(layer.width * scale));
-      displayCanvas.height = Math.max(1, Math.round(layer.height * scale));
-      const displayCtx = displayCanvas.getContext('2d');
-      if (!displayCtx) {
-        return Promise.resolve(canvasToDataUrl(layer.canvas));
-      }
-      displayCtx.imageSmoothingEnabled = true;
-      displayCtx.imageSmoothingQuality = 'high';
-      displayCtx.drawImage(layer.canvas, 0, 0, displayCanvas.width, displayCanvas.height);
-      return Promise.resolve(canvasToDataUrl(displayCanvas));
+      // For display, just reuse the encoded PNG data URL from renderLayer.
+      return Promise.resolve(layer.dataUrl ?? null);
     };
 
     try {
       // When background isn't ready or explicitly skipped, don't build a shirt layer.
-      const shirtLayer = skipBackground ? null : renderLayer(true, 'none');
-      // Generate design-only at full canvas size; wait briefly for images to be ready
+      const shirtLayer = skipBackground ? null : await renderLayer(true, 'none', 1);
+      // Generate design-only at full canvas resolution (RENDER_SCALE), wait briefly for images to be ready
       await waitForImagesToLoad();
-      const artLayer = renderLayer(false, 'content');
+      const artLayer = await renderLayer(false, 'content', RENDER_SCALE);
 
       const designHiResUrl = shirtLayer?.dataUrl ?? artLayer?.dataUrl ?? null;
       const displaySource = shirtLayer ?? artLayer;
@@ -2199,7 +2226,11 @@
         designOnlyDisplayUrl = await createDisplayUrl(artLayer) ?? artLayer.dataUrl;
         designOnlyExportUrl = applyDpi(artLayer.dataUrl, DESIGN_ONLY_EXPORT_PPI) ?? artLayer.dataUrl;
         try {
-          designOnlyCacheRef = await storeDataUrlInCache(designOnlyExportUrl, `${view.toLowerCase()}-design-only`);
+          if (designOnlyExportUrl) {
+            designOnlyCacheRef = await storeDataUrlInCache(designOnlyExportUrl, `${view.toLowerCase()}-design-only`);
+          } else {
+            designOnlyCacheRef = null;
+          }
         } catch (error) {
           console.warn('[ShirtPlacer] Failed to cache design-only preview', error);
         }
@@ -2235,7 +2266,7 @@
         return;
       }
 
-      const fallbackLayer = renderLayer(false, 'content');
+      const fallbackLayer = await renderLayer(false, 'content');
       if (fallbackLayer) {
         let fallbackDesignDisplay: string | null = null;
         let fallbackDesignExport: string | null = null;
@@ -2248,9 +2279,11 @@
           fallbackDesignDisplay = await createDisplayUrl(fallbackLayer) ?? fallbackLayer.dataUrl;
           fallbackDesignExport = applyDpi(fallbackLayer.dataUrl, DESIGN_ONLY_EXPORT_PPI) ?? fallbackLayer.dataUrl;
           try {
-            const storedFallback = await storeDataUrlInCache(fallbackDesignExport, `${view.toLowerCase()}-design-only`);
-            if (storedFallback) {
-              fallbackDesignCacheRef = storedFallback;
+            if (fallbackDesignExport) {
+              const storedFallback = await storeDataUrlInCache(fallbackDesignExport, `${view.toLowerCase()}-design-only`);
+              if (storedFallback) {
+                fallbackDesignCacheRef = storedFallback;
+              }
             }
           } catch (error) {
             console.warn('[ShirtPlacer] Failed to cache fallback design-only preview', error);

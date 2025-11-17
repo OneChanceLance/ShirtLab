@@ -13,14 +13,14 @@
     "@babylonjs/inspector": "^8.15.0",
     "@babylonjs/loaders": "^8.14.2",
     "@supabase/supabase-js": "^2.50.3",
+    "changedpi": "^1.0.4",
     "fabric": "^6.7.0",
     "firebase": "^11.9.1",
     "pinia": "^3.0.3",
     "stripe": "^19.1.0",
     "three": "^0.178.0",
     "vue": "^3.5.17",
-    "vue-material-design-icons": "^5.3.1",
-    "changedpi": "^1.0.3"
+    "vue-material-design-icons": "^5.3.1"
   },
   "devDependencies": {
     "@types/three": "^0.177.0",

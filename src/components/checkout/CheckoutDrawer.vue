@@ -366,20 +366,21 @@
    */
   import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
   import { storeToRefs } from 'pinia';
-  import { changeDpiDataUrl } from 'changedpi';
+  import { changeDpiBlob, changeDpiDataUrl } from 'changedpi';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
   import type { CartItem } from '../../stores/cart';
   import { formatCurrency } from '../../utils/currency';
   import { calculatePricing } from '../../utils/pricing';
   import { supabase } from '../../supabase';
-  import { uploadBlobToFirebase } from '../../utils/firebaseUploads';
+  import { uploadBlobToFirebase, upscalePngBlobForUpload } from '../../utils/firebaseUploads';
   import type { DesignViewName, SerializedDesignState } from '../../types/designState';
   import {
     isCachedAssetRef,
     getCachedBlob,
     resolveCachedRefFromObjectUrl,
     type CachedAssetRef,
+    touchCachedObjectUrl,
   } from '../../utils/designCache';
   import {
     dedupePreviewList,
@@ -624,23 +625,29 @@
         ]),
       ),
 
-      frontWithoutShirt: dedupePreviewList(
-        preferNonBlobSources([
-          blankCacheRefs.Front,
-          canvasData.Front ?? null,
-          liveBlankFront,
-          ...candidates.frontWithoutShirt,
-        ]),
-      ),
+      // Prefer fresh design-only renders (live + canvas + candidates),
+      // and only fall back to any old blank cache ref at the very end.
+      frontWithoutShirt: candidates.hasFrontDesign
+        ? dedupePreviewList(
+          preferNonBlobSources([
+            liveBlankFront,
+            canvasData.Front ?? null,
+            ...candidates.frontWithoutShirt,
+            blankCacheRefs.Front,
+          ]),
+        )
+        : [],
 
-      backWithoutShirt: dedupePreviewList(
-        preferNonBlobSources([
-          blankCacheRefs.Back,
-          canvasData.Back ?? null,
-          liveBlankBack,
-          ...candidates.backWithoutShirt,
-        ]),
-      ),
+      backWithoutShirt: candidates.hasBackDesign
+        ? dedupePreviewList(
+          preferNonBlobSources([
+            liveBlankBack,
+            canvasData.Back ?? null,
+            ...candidates.backWithoutShirt,
+            blankCacheRefs.Back,
+          ]),
+        )
+        : [],
     };
     logPreviewBuckets('checkoutDrawer.buildUploadCandidates', uploadBuckets, {
       cartItemId: item.id,
@@ -1164,38 +1171,21 @@
     });
   }
 
-  async function changeDpiBlob(blob: Blob, targetDpi: number): Promise<Blob | null> {
-    try {
-      const originalDataUrl = await blobToDataUrl(blob);
-      const stamped = changeDpiDataUrl(originalDataUrl, targetDpi);
-      if (!stamped || typeof stamped !== 'string') return null;
-      return dataUrlToBlob(stamped);
-    } catch (error) {
-      console.warn('[Checkout] changeDpiBlob failed', { targetDpi }, error);
-      return null;
-    }
-  }
 
   async function readBlobFromObjectUrl(url: string): Promise<Blob | null> {
     if (!url || !url.startsWith('blob:')) return null;
     try {
-      return await new Promise<Blob | null>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('GET', url, true);
-        xhr.responseType = 'blob';
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            const responseBlob = xhr.response instanceof Blob ? xhr.response : null;
-            resolve(responseBlob);
-          } else {
-            resolve(null);
-          }
-        };
-        xhr.onerror = () => reject(new Error(`XHR failed for blob URL: ${url}`));
-        xhr.send();
-      });
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn('[Checkout] readBlobFromObjectUrl: fetch failed for blob URL', {
+          url,
+          status: response.status,
+        });
+        return null;
+      }
+      return await response.blob();
     } catch (error) {
-      console.warn('[Checkout] Failed to read blob URL via XHR', url, error);
+      console.warn('[Checkout] Failed to read blob URL via fetch', url, error);
       return null;
     }
   }
@@ -1325,117 +1315,48 @@
     progressLabel?: string,
     options?: UploadImageOptions,
   ): Promise<string | null> {
-    const trimmedBucket = bucket.trim();
-    if (!trimmedBucket) return null;
-
-    const trimmedSource = source.trim();
+    const trimmedSource = (source || '').trim();
     if (!trimmedSource) return null;
-    const sourceDescriptor = describeUploadSource(trimmedSource);
 
-    // Force uploads only — no external URL fallbacks.
-    const targetDpi = typeof options?.targetDpi === 'number' ? options.targetDpi : null;
+    // Default to our print DPI
+    const targetDpi = typeof options?.targetDpi === 'number' ? options.targetDpi : TARGET_DESIGN_DPI;
 
-    const cacheKey = `${trimmedBucket}:${targetDpi ?? 'dpi-none'}:${trimmedSource}`;
-    const cached = storageUploadCache.get(cacheKey);
-    if (cached) {
-      uploadProgress.active = true;
-      uploadProgress.total += 1;
-      uploadProgress.current += 1;
-      uploadProgress.label = progressLabel ?? fallbackName;
-      if (uploadProgress.current >= uploadProgress.total) scheduleUploadProgressHide();
-      return cached;
+    const cacheKey = `${bucket}:${pathSegments.join('/')}:${trimmedSource}`;
+    if (storageUploadCache.has(cacheKey)) {
+      return storageUploadCache.get(cacheKey) ?? null;
     }
 
-    uploadProgress.active = true;
-    uploadProgress.total += 1;
-    uploadProgress.label = progressLabel ?? fallbackName;
-
-    try {
-      const safeSegments = pathSegments.map((segment, index) =>
-        sanitizePathSegment(segment, index === pathSegments.length - 1 ? fallbackName : `segment-${index + 1}`),
-      );
-
-      const uploadBlob = async (blob: Blob, contentTypeHint: string | null | undefined): Promise<string | null> => {
-        const resolvedType = contentTypeHint || blob.type || 'image/png';
-        const extension = inferFileExtension(resolvedType);
-        const path = `${safeSegments.join('/')}.${extension}`;
-        const label = progressLabel ?? fallbackName;
-
-        const firebaseObjectPath = `${trimmedBucket}/${path}`;
-        const uploadPlan: StorageUploadPlanEntry[] = [
-          { service: 'supabase', bucket: trimmedBucket, path, label },
-          { service: 'firebase', bucket: FIREBASE_STORAGE_BUCKET, path: firebaseObjectPath, label },
-        ];
-        logStorageUploadPlan(uploadPlan, {
-          source: trimmedSource.slice(0, 120),
-          cacheKey,
-        });
-
-        let supabaseUrl: string | null = null;
-        let firebaseUrl: string | null = null;
-
-        for (const target of uploadPlan) {
-          if (target.service === 'supabase') {
-            const storageBucket = supabase.storage.from(trimmedBucket);
-            const { error } = await storageBucket.upload(path, blob, {
-              contentType: resolvedType,
-              upsert: true,
-              cacheControl: '3600',
-            });
-            if (error) throw error;
-            const { data } = storageBucket.getPublicUrl(path);
-            supabaseUrl = data?.publicUrl ?? supabaseUrl;
-          } else if (target.service === 'firebase') {
-            const firebaseResult = await uploadBlobToFirebase(target.path, blob, resolvedType, {
-              cacheControl: 'public,max-age=3600,immutable',
-            });
-            if (firebaseResult) {
-              firebaseUrl = firebaseResult;
-            }
-          }
-        }
-
-        if (firebaseUrl) {
-          console.info('[Firebase] Upload complete; link returned:', firebaseUrl);
-        }
-
-        const finalUrl = firebaseUrl ?? supabaseUrl ?? null;
-        if (finalUrl) storageUploadCache.set(cacheKey, finalUrl);
-        return finalUrl;
-      };
-
-      // Resolve to a Blob from cache://, data:, blob:, or http(s)
-      const resolved = await resolveSourceBlob(trimmedSource);
-      if (!resolved) return null;
-
-      console.info('[Checkout] Upload source ready', {
-        bucket: trimmedBucket,
-        name: fallbackName,
-        label: progressLabel ?? fallbackName,
-        origin: sourceDescriptor,
-        preview: trimmedSource.slice(0, 80),
-        blobSize: typeof resolved.blob.size === 'number' ? resolved.blob.size : null,
-        contentType: resolved.contentType ?? resolved.blob.type ?? null,
-      });
-
-      // Optional PNG DPI stamp → upload
-      const dpiAdjusted = await applyTargetDpiIfNeeded(resolved.blob, resolved.contentType, targetDpi);
-      const uploadedUrl = await uploadBlob(dpiAdjusted.blob, dpiAdjusted.contentType);
-      return uploadedUrl ?? null;
-    } catch (error) {
-      console.error('[Checkout] Failed to upload image to storage (no fallbacks)', {
-        bucket: trimmedBucket,
-        source: trimmedSource.slice(0, 120),
-        pathSegments,
-        fallbackName,
-      }, error);
+    const resolved = await resolveSourceBlob(trimmedSource);
+    if (!resolved) {
+      console.warn('[Checkout] Unable to resolve source for upload', { source: trimmedSource });
       return null;
-    } finally {
-      uploadProgress.current += 1;
-      if (uploadProgress.current >= uploadProgress.total) scheduleUploadProgressHide();
     }
-  }
 
+    // 🔼 KEY CHANGE: upscale ONLY for upload, not for UI.
+    // Your live canvas is effectively 5× (RENDER_SCALE = 5), but the preview snapshots
+    // are closer to 1× (~600px long side). Here we bump the upload blob so the
+    // longest side is ~3000px, which matches that 5× scale.
+    let uploadReadyBlob = resolved.blob;
+    try {
+      uploadReadyBlob = await upscalePngBlobForUpload(resolved.blob, 3000);
+    } catch (error) {
+      console.warn('[Checkout] upscalePngBlobForUpload failed, using original blob for upload', error);
+    }
+
+    // Then stamp DPI metadata (300) on the upscaled PNG
+    const dpiAdjusted = await applyTargetDpiIfNeeded(uploadReadyBlob, resolved.contentType, targetDpi);
+
+    const uploadedUrl = await uploadBlobToFirebase(
+      bucket,
+      dpiAdjusted.blob,
+      fallbackName,
+    );
+
+    if (uploadedUrl) {
+      storageUploadCache.set(cacheKey, uploadedUrl);
+    }
+    return uploadedUrl ?? null;
+  }
   async function uploadFromCandidateSources(
     candidates: Array<string | null | undefined>,
     bucket: string,
@@ -2015,13 +1936,13 @@
         const assetKeyForName = sourceInfo.original ?? sourceInfo.raw ?? uploadSource;
         const assetName = deriveAssetName(assetKeyForName, sourceIndex);
 
-      if (totalDesignUploads > 0) {
-        const designName = assetName || `design-${sourceIndex + 1}`;
-        console.info(`[Checkout] Uploading design element ${sourceIndex + 1} of ${totalDesignUploads}`, {
-          cartItemId: item.id,
-          name: designName,
-        });
-      }
+        if (totalDesignUploads > 0) {
+          const designName = assetName || `design-${sourceIndex + 1}`;
+          console.info(`[Checkout] Uploading design element ${sourceIndex + 1} of ${totalDesignUploads}`, {
+            cartItemId: item.id,
+            name: designName,
+          });
+        }
 
         const uploadedDesign = await uploadImageSource(
           uploadSource,
@@ -2434,13 +2355,102 @@
       : Boolean(previewSources.value.Back),
   }));
   const hasDesignOnlyAny = computed(() => Boolean(blankPreviewSources.value.Front || blankPreviewSources.value.Back));
-  const activePreviewSrc = computed(() => {
+  const rawActivePreviewSrc = computed(() => {
     const view = previewView.value;
     if (showDesignOnly.value) {
       return blankPreviewSources.value[view] ?? null;
     }
     return previewSources.value[view] ?? null;
   });
+
+  const activePreviewSrc = ref<string | null>(null);
+  // Local object URL created from inline data/legacy sources; revoked on change/unmount.
+  let localPreviewObjectUrl: string | null = null;
+
+  function setLocalPreviewObjectUrl(url: string | null) {
+    if (localPreviewObjectUrl) {
+      try {
+        URL.revokeObjectURL(localPreviewObjectUrl);
+      } catch {
+        // ignore
+      }
+      localPreviewObjectUrl = null;
+    }
+    activePreviewSrc.value = url;
+    if (url && url.startsWith('blob:')) {
+      localPreviewObjectUrl = url;
+    }
+  }
+
+  // Normalize preview sources so the <img> always uses blob URLs (when possible),
+  // rehydrated from cache or inline data each time.
+  watch(
+    rawActivePreviewSrc,
+    async (value) => {
+      const normalized = typeof value === 'string' ? value.trim() : '';
+      if (!normalized) {
+        setLocalPreviewObjectUrl(null);
+        return;
+      }
+
+      // For standard HTTP/HTTPS, use as-is.
+      if (
+        normalized.startsWith('http://') ||
+        normalized.startsWith('https://')
+      ) {
+        activePreviewSrc.value = normalized;
+        return;
+      }
+
+      // If we have a cache ref, resolve it to a blob URL for display.
+      if (isCachedAssetRef(normalized)) {
+        try {
+          const objectUrl = await touchCachedObjectUrl(normalized);
+          activePreviewSrc.value = objectUrl ?? null;
+        } catch (error) {
+          console.warn('[Checkout] Failed to resolve cached preview for display', normalized, error);
+          setLocalPreviewObjectUrl(null);
+        }
+        return;
+      }
+
+      // Inline data URL: convert to blob and create an object URL.
+      if (normalized.startsWith('data:')) {
+        try {
+          const blob = dataUrlToBlob(normalized);
+          const url = URL.createObjectURL(blob);
+          setLocalPreviewObjectUrl(url);
+        } catch (error) {
+          console.warn('[Checkout] Failed to convert data URL preview to blob', error);
+          setLocalPreviewObjectUrl(null);
+        }
+        return;
+      }
+
+      // If we have a blob URL, try to map it back to a cache ref and resolve that.
+      if (normalized.startsWith('blob:')) {
+        try {
+          const cachedRef = resolveCachedRefFromObjectUrl(normalized);
+          if (cachedRef && isCachedAssetRef(cachedRef)) {
+            const objectUrl = await touchCachedObjectUrl(cachedRef);
+            if (objectUrl) {
+              activePreviewSrc.value = objectUrl;
+              return;
+            }
+          }
+        } catch (error) {
+          console.warn('[Checkout] Failed to resolve blob preview for display', normalized, error);
+        }
+        // Fallback: keep the existing blob URL.
+        activePreviewSrc.value = normalized;
+        return;
+      }
+
+      // Any other schemes are not displayable.
+      setLocalPreviewObjectUrl(null);
+    },
+    { immediate: true },
+  );
 
   function determineInitialPreviewView(item: CartItem | null): PreviewView {
     const sources = resolvePreviewSources(item);
@@ -2487,6 +2497,17 @@
     },
     { deep: true },
   );
+
+  onBeforeUnmount(() => {
+    if (localPreviewObjectUrl) {
+      try {
+        URL.revokeObjectURL(localPreviewObjectUrl);
+      } catch {
+        // ignore
+      }
+      localPreviewObjectUrl = null;
+    }
+  });
 
   function proceedToContact() {
     if (!hasCartItems.value) return;
@@ -4245,13 +4266,13 @@
     }
   }
 </style>
-    const registerPreviewAsset = (params: { cartItemId: string; url: string | null; bucket: string | null }) => {
-      const { cartItemId, url, bucket } = params;
-      if (!url || url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('cache://')) return;
-      designAssets.push({
-        cartItemId,
-        url,
-        bucket: bucket ?? null,
-        stored: true,
-      });
-    };
+const registerPreviewAsset = (params: { cartItemId: string; url: string | null; bucket: string | null }) => {
+const { cartItemId, url, bucket } = params;
+if (!url || url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('cache://')) return;
+designAssets.push({
+cartItemId,
+url,
+bucket: bucket ?? null,
+stored: true,
+});
+};

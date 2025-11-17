@@ -58,26 +58,17 @@ export function isCachedAssetRef(value: unknown): value is CachedAssetRef {
   return typeof value === 'string' && value.startsWith(CACHE_REF_PREFIX) && value.length > CACHE_REF_PREFIX.length;
 }
 
-function to300DpiIfImage(dataUrl: string): string {
-  try {
-    const header = dataUrl.slice(0, 64).toLowerCase();
-    if (!header.startsWith('data:image')) return dataUrl;
-    if (header.includes('image/svg')) return dataUrl; // SVG doesn't use DPI like raster formats
-    return changeDpiDataUrl(dataUrl, 300);
-  } catch {
-    return dataUrl;
-  }
-}
-
 export function dataUrlToBlob(dataUrl: string): Blob {
+  console.log('[designCache] full dataUrl before blob:', dataUrl);
   const comma = dataUrl.indexOf(',');
+
   if (comma < 0) {
     throw new Error('Invalid data URL: missing comma');
   }
 
   const header = dataUrl.slice(0, comma);
   let payload = dataUrl.slice(comma + 1);
-
+  console.log('[designCache] base64 payload before blob:', payload);
   // Parse "data:[<mime>][;param]*,...."
   const match = header.match(/^data:([^;,]+)?((?:;[^,;]+)*)$/i);
   const mime = (match?.[1] || 'application/octet-stream').toLowerCase();
@@ -116,7 +107,7 @@ export async function storeDataUrlInCache(dataUrl: string, context?: string): Pr
   if (!ensureBrowser()) return null;
   if (!dataUrl.startsWith('data:')) return null;
   try {
-    const processed = to300DpiIfImage(dataUrl);
+    const processed = changeDpiDataUrl(dataUrl, 300);
     const blob = dataUrlToBlob(processed);
     const key = generateKey(context, blob.type);
     const db = await openDatabase();
@@ -125,11 +116,21 @@ export async function storeDataUrlInCache(dataUrl: string, context?: string): Pr
       const store = tx.objectStore(STORE_NAME);
       const request = store.put(blob, key);
       request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error ?? new Error('Failed to cache asset'));
+      request.onerror = () => {
+        const err = request.error;
+        if (err && err.name === 'QuotaExceededError') {
+          console.warn('[designCache] Quota exceeded; skipping cache for', context);
+          resolve(); // or reject, but don't treat as fatal
+          return;
+        }
+        reject(err ?? new Error('Failed to cache asset'));
+      };
+
+
     });
     return toCacheRef(key);
   } catch (error) {
-    console.warn('[designCache] Failed to store data URL', error);
+    console.warn('[designCache] Failed to store data URL for', context, " ", dataUrl, " ", error);
     return null;
   }
 }
@@ -215,6 +216,35 @@ export async function resolveCachedAsDataUrl(ref: CachedAssetRef): Promise<strin
     reader.onerror = () => reject(reader.error ?? new Error('Failed to read cached blob'));
     reader.readAsDataURL(blob);
   });
+}
+
+/**
+ * Re-hydrate a cached asset into a fresh IndexedDB entry.
+ *
+ * Useful when you want to:
+ *   1. Read the existing cached blob as a data URL (data64),
+ *   2. Run it back through the same DPI-stamping + Blob pipeline,
+ *   3. Store it again and get a new cache ref.
+ *
+ * The original cache entry is left intact; callers can decide whether to
+ * keep or purge it via `removeCachedAsset`.
+ */
+export async function recacheAssetFromRef(
+  ref: CachedAssetRef,
+  context?: string,
+): Promise<CachedAssetRef | null> {
+  if (!ensureBrowser()) return null;
+  try {
+    const dataUrl = await resolveCachedAsDataUrl(ref);
+    if (!dataUrl || !dataUrl.startsWith('data:')) {
+      return null;
+    }
+    const nextRef = await storeDataUrlInCache(dataUrl, context);
+    return nextRef;
+  } catch (error) {
+    console.warn('[designCache] Failed to recache asset from ref', { ref, context }, error);
+    return null;
+  }
 }
 
 export function getCachedObjectUrl(ref: CachedAssetRef): string | null {
