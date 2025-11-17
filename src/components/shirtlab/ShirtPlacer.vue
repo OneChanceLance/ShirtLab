@@ -1158,7 +1158,9 @@
       cleanupPreviewCaches(view);
       return;
     }
-    const nextPreview = hiRes ?? display ?? null;
+    // Prefer the WITH-shirt composite for the main design preview (used by uploads),
+    // and only fall back to hi-res if we somehow lack a display image.
+    const nextPreview = display ?? hiRes ?? null;
     checkoutStore.setDesignPreview(view, nextPreview);
     previewDebug(view, 'design preview synced', {
       reason,

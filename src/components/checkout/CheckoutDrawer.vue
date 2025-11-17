@@ -576,8 +576,8 @@
     },
   };
 
-  // Only upload design-only canvas renders; keep garment previews client-side.
-  const UPLOAD_WITH_SHIRT_PREVIEWS = false;
+  // Upload both design-only and garment previews so proof images are stored server-side.
+  const UPLOAD_WITH_SHIRT_PREVIEWS = true;
   const PREVIEW_UPLOAD_SLOTS = Object.keys(PREVIEW_UPLOAD_SLOT_CONFIG) as PreviewUploadSlotKey[];
   const WITH_SHIRT_UPLOAD_SLOTS = new Set<PreviewUploadSlotKey>(['front-with-shirt', 'back-with-shirt']);
 
@@ -1346,10 +1346,27 @@
     // Then stamp DPI metadata (300) on the upscaled PNG
     const dpiAdjusted = await applyTargetDpiIfNeeded(uploadReadyBlob, resolved.contentType, targetDpi);
 
+    // Build a concrete object path inside the Firebase storage bucket:
+    // <logical-bucket>/<orders/...>/<fallbackName>.<ext>
+    const fileExtension = inferFileExtension(dpiAdjusted.contentType);
+    const baseName = sanitizePathSegment(fallbackName, 'preview');
+    const fileName = baseName.endsWith(`.${fileExtension}`) ? baseName : `${baseName}.${fileExtension}`;
+    const objectPath = [bucket, ...pathSegments, fileName].filter(Boolean).join('/');
+
+    const storagePlan: StorageUploadPlanEntry[] = [
+      {
+        service: 'firebase',
+        bucket: FIREBASE_STORAGE_BUCKET,
+        path: objectPath,
+        label: progressLabel ?? 'Design/preview image',
+      },
+    ];
+    logStorageUploadPlan(storagePlan, { source: trimmedSource, cacheKey });
+
     const uploadedUrl = await uploadBlobToFirebase(
-      bucket,
+      objectPath,
       dpiAdjusted.blob,
-      fallbackName,
+      dpiAdjusted.contentType,
     );
 
     if (uploadedUrl) {
