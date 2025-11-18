@@ -1763,6 +1763,12 @@
   }
 
   async function updatePreviewFor(view: View, { skipBackground = false } = {}) {
+    const startTime =
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+    let exitTag: 'success-main' | 'success-fallback' | 'error' | 'unknown' = 'unknown';
+    console.log('[ShirtPlacer] updatePreviewFor:start', { view, skipBackground });
     const originalView = selectedView.value as View;
     let switchedView = false;
 
@@ -2265,6 +2271,7 @@
           dpi: DESIGN_ONLY_EXPORT_PPI,
           dataUrl: designOnlyExportUrl,
         });
+        exitTag = 'success-main';
         return;
       }
 
@@ -2317,15 +2324,26 @@
           dpi: DESIGN_ONLY_EXPORT_PPI,
           dataUrl: fallbackDesignExport,
         });
+        exitTag = 'success-fallback';
       }
     } catch (err) {
       console.warn('[updatePreviewFor] failed to build full-canvas preview:', err);
+      exitTag = 'error';
     } finally {
       if (switchedView) {
         storeViewState(view);
         selectedView.value = originalView;
         loadViewState(originalView);
       }
+      const endTime =
+        typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+      console.log('[ShirtPlacer] updatePreviewFor:finish', {
+        view,
+        exitTag,
+        durationMs: Math.round(endTime - startTime),
+      });
     }
   }
 
@@ -2349,6 +2367,7 @@
   }
 
   async function generateHighResCheckoutPreviews() {
+    console.log('[ShirtPlacer] generateHighResCheckoutPreviews:start');
     const previous = generateHighResPreviews.value;
     generateHighResPreviews.value = true;
     try {
@@ -2363,6 +2382,7 @@
       console.info('[ShirtPlacer] High-res checkout previews refreshed for both views.');
     } finally {
       generateHighResPreviews.value = previous;
+      console.log('[ShirtPlacer] generateHighResCheckoutPreviews:finish');
     }
   }
 

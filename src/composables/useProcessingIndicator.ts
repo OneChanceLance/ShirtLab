@@ -25,6 +25,7 @@ function resetProcessingFlags() {
 }
 
 export function startProcessingIndicator(label = 'Processing design images') {
+  console.log('[ProcessingIndicator] startProcessingIndicator()', { label });
   imageProcessingState.active = true;
   imageProcessingState.completed = 0;
   imageProcessingState.total = 4;
@@ -39,6 +40,7 @@ export function startProcessingIndicator(label = 'Processing design images') {
 }
 
 export function finishProcessingIndicator() {
+  console.log('[ProcessingIndicator] finishProcessingIndicator()');
   if (processingTimeout) {
     clearTimeout(processingTimeout);
     processingTimeout = null;
@@ -57,6 +59,11 @@ export function markProcessingVariant(key: ProcessingVariantKey, value: string |
     imageProcessingState.total,
     imageProcessingState.completed + 1,
   );
+  console.log('[ProcessingIndicator] markProcessingVariant()', {
+    key,
+    completed: imageProcessingState.completed,
+    total: imageProcessingState.total,
+  });
   if (imageProcessingState.completed >= imageProcessingState.total) {
     finishProcessingIndicator();
   }

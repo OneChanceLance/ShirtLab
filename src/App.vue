@@ -1,19 +1,5 @@
 <template>
   <div class="app-shell">
-    <transition name="processing-overlay-fade">
-      <div v-if="imageProcessingState.active" class="processing-overlay" role="status" aria-live="polite">
-        <div class="processing-overlay__panel">
-          <div class="checkout-processing-indicator__spinner" aria-hidden="true"></div>
-          <div class="checkout-processing-indicator__content">
-            <p class="checkout-processing-indicator__label">{{ imageProcessingState.label }}</p>
-            <div class="checkout-processing-indicator__bar">
-              <div class="checkout-processing-indicator__fill" :style="{ width: `${processingPercent}%` }"></div>
-            </div>
-          </div>
-          <span class="checkout-processing-indicator__percent">{{ processingPercent }}%</span>
-        </div>
-      </div>
-    </transition>
     <div class="app-shell__workspace">
       <div class="embed-wrapper">
         <div>
@@ -57,7 +43,6 @@
   import CartSlideover from './components/checkout/CartSlideover.vue';
   import CheckoutDrawer from './components/checkout/CheckoutDrawer.vue';
   import { onMounted } from 'vue';
-  import { imageProcessingState, processingPercent } from './composables/useProcessingIndicator';
 
   onMounted(() => {
     const sendHeight = () => {

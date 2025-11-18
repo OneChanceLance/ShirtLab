@@ -373,7 +373,7 @@
   import { formatCurrency } from '../../utils/currency';
   import { calculatePricing } from '../../utils/pricing';
   import { supabase } from '../../supabase';
-  import { uploadBlobToFirebase, upscalePngBlobForUpload } from '../../utils/firebaseUploads';
+  import { uploadBlobToFirebase } from '../../utils/firebaseUploads';
   import type { DesignViewName, SerializedDesignState } from '../../types/designState';
   import {
     isCachedAssetRef,
@@ -840,6 +840,7 @@
   const cartItemCount = computed(() => cartStore.itemCount);
 
   function logCurrentUploadPlan(context: string) {
+    if (!DEBUG_PREVIEW_PIPELINE) return;
     const plan = buildUploadPlanEntries(cartItems.value);
     logUploadPlanTable(context, plan);
   }
@@ -1332,19 +1333,8 @@
       return null;
     }
 
-    // 🔼 KEY CHANGE: upscale ONLY for upload, not for UI.
-    // Your live canvas is effectively 5× (RENDER_SCALE = 5), but the preview snapshots
-    // are closer to 1× (~600px long side). Here we bump the upload blob so the
-    // longest side is ~3000px, which matches that 5× scale.
-    let uploadReadyBlob = resolved.blob;
-    try {
-      uploadReadyBlob = await upscalePngBlobForUpload(resolved.blob, 3000);
-    } catch (error) {
-      console.warn('[Checkout] upscalePngBlobForUpload failed, using original blob for upload', error);
-    }
-
     // Then stamp DPI metadata (300) on the upscaled PNG
-    const dpiAdjusted = await applyTargetDpiIfNeeded(uploadReadyBlob, resolved.contentType, targetDpi);
+    const dpiAdjusted = await applyTargetDpiIfNeeded(resolved.blob, resolved.contentType, targetDpi);
 
     // Build a concrete object path inside the Firebase storage bucket:
     // <logical-bucket>/<orders/...>/<fallbackName>.<ext>
@@ -1652,6 +1642,7 @@
   }
 
   function logUploadPlanTable(context: string, entries: UploadPlanEntry[]) {
+    if (!DEBUG_PREVIEW_PIPELINE) return;
     try {
       const rows = entries.map((entry, index) => ({
         Index: index + 1,
@@ -1676,6 +1667,7 @@
     assets: Array<{ url: string; bucket: string | null; stored: boolean }> | null;
     elements: Array<Record<string, any>> | null;
   }> {
+    if (!DEBUG_PREVIEW_PIPELINE) return [];
     const rawItemsSnapshot = cloneSerializable<CartItem[]>(cartItems.value);
     const uploadPlanEntries = buildUploadPlanEntries(rawItemsSnapshot);
     logUploadPlanTable('checkout-proceed', uploadPlanEntries);
@@ -1708,6 +1700,7 @@
   }
 
   function logDesignPayloadSnapshot(context: string) {
+    if (!DEBUG_PREVIEW_PIPELINE) return;
     try {
       const snapshot = createDesignPayloadSnapshot();
       if (!snapshot.length) {
