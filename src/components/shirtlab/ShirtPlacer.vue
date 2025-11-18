@@ -93,7 +93,6 @@
 
 
   import { describePreviewSource, normalizePreview } from '../../utils/previewPipeline';
-  import { uploadBytes } from 'firebase/storage';
 
   // -----------------------------------------------------
   // Local utility shims (fix TS/undefined errors, safe defaults)
@@ -1802,8 +1801,6 @@
     const scaleX = targetGridWidthPx / gridWidthPx;
     const scaleY = targetGridHeightPx / gridHeightPx;
     const exportScale = Math.max(1, Math.min(Math.max(scaleX, scaleY), MAX_EXPORT_SCALE));
-    const DISPLAY_PREVIEW_PPI = 300;
-
     const applyDpi = (dataUrl: string | null, dpi: number): string | null => {
       if (!dataUrl) return dataUrl;
       try {
@@ -1978,32 +1975,6 @@
 
     // Export canvases are already sized from grid inches × 300 DPI.
     // Avoid aggressively upscaling beyond that – it softens details.
-    const MIN_DESIGN_ONLY_LONG_SIDE_PX = 0; // no forced upscale for design‑only exports
-    const MIN_WITH_SHIRT_LONG_SIDE_PX = 0;  // no forced upscale for shirt composites
-    const MAX_EXPORT_LONG_SIDE_PX = 7000; // cap to prevent runaway memory
-
-    const ensureMinimumResolution = (
-      source: HTMLCanvasElement,
-      minLongSide: number,
-    ): HTMLCanvasElement => {
-      if (!minLongSide || minLongSide <= 0) return source;
-      const longestSide = Math.max(source.width, source.height);
-      if (longestSide >= minLongSide) return source;
-      const targetLongSide = Math.min(minLongSide, MAX_EXPORT_LONG_SIDE_PX);
-      if (!longestSide || longestSide <= 0) return source;
-      const scale = targetLongSide / longestSide;
-      const targetWidth = Math.max(1, Math.round(source.width * scale));
-      const targetHeight = Math.max(1, Math.round(source.height * scale));
-      const scaled = document.createElement('canvas');
-      scaled.width = targetWidth;
-      scaled.height = targetHeight;
-      const ctx = scaled.getContext('2d');
-      if (!ctx) return source;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
-      return scaled;
-    };
     const canvasToPngDataUrl = (canvas: HTMLCanvasElement): Promise<string | null> =>
       new Promise((resolve) => {
         try {

@@ -72,7 +72,7 @@ export async function upscalePngBlobForUpload(
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
 
-    return await new Promise<Blob>((resolve, reject) => {
+    return await new Promise<Blob>((resolve) => {
       canvas.toBlob((scaled) => {
         if (!scaled) {
           resolve(blob);

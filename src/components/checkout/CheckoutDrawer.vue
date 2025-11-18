@@ -367,7 +367,7 @@
    */
   import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
   import { storeToRefs } from 'pinia';
-  import { changeDpiBlob, changeDpiDataUrl } from 'changedpi';
+  import { changeDpiBlob } from 'changedpi';
   import { useCheckoutStore } from '../../stores/checkout';
   import { useCartStore } from '../../stores/cart';
   import type { CartItem } from '../../stores/cart';
@@ -1161,19 +1161,6 @@
     if (!uploadProgress.total) return 0;
     return Math.min(100, Math.round((uploadProgress.current / uploadProgress.total) * 100));
   });
-
-  async function blobToDataUrl(blob: Blob): Promise<string> {
-    return await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = typeof reader.result === 'string' ? reader.result : '';
-        resolve(result);
-      };
-      reader.onerror = () => reject(reader.error ?? new Error('Failed to convert blob to data URL'));
-      reader.readAsDataURL(blob);
-    });
-  }
-
 
   async function readBlobFromObjectUrl(url: string): Promise<Blob | null> {
     if (!url || !url.startsWith('blob:')) return null;
@@ -2301,15 +2288,6 @@
     Back: 'Back',
   };
 
-
-  function describeUploadSource(source: string): string {
-    const trimmed = source.trim().toLowerCase();
-    if (trimmed.startsWith('data:')) return 'data-url';
-    if (trimmed.startsWith('blob:')) return 'blob-url';
-    if (trimmed.startsWith('cache://')) return 'cache-ref';
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return 'remote-url';
-    return 'local';
-  }
 
   function resolvePreviewSources(item: CartItem | null): Record<PreviewView, string | null> {
     if (!item) {
