@@ -62,7 +62,7 @@
 
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, watch, ref, reactive } from 'vue';
-
+  import { changeDpiDataUrl, changeDpiBlob } from 'changedpi';
   import DeleteIcon from 'vue-material-design-icons/Close.vue'
   import DuplicateIcon from 'vue-material-design-icons/ContentDuplicate.vue'
   import ResizeIcon from 'vue-material-design-icons/CropFree.vue'
@@ -74,7 +74,7 @@
   import { withDefaults, getEffectTransform, getEffectAdvance, applyToContext } from '../sideMenu/types/effectsList';
   import { getAABB, getAABBCorners, getRotatedCorners, pointInRotatedRect } from './utils/geometry';
   import { useDesignLayers } from './composables/useDesignLayers';
-  import { createGridState, hydrateSizeMeasurements, type DesignGrid, type View } from './composables/useGrid';
+  import { createGridState, type DesignGrid, type View } from './composables/useGrid';
   import { useCheckoutStore } from '../../stores/checkout';
   import type {
     SerializedDesignState,
@@ -82,6 +82,22 @@
     SerializedTextObject,
     SerializedDesignView,
   } from '../../types/designState';
+  import {
+    storeDataUrlInCache,
+    touchCachedObjectUrl,
+    removeCachedAsset,
+    revokeCachedObjectUrl,
+    isCachedAssetRef,
+    type CachedAssetRef,
+  } from '../../utils/designCache';
+
+
+  import { describePreviewSource, normalizePreview } from '../../utils/previewPipeline';
+  import { uploadBytes } from 'firebase/storage';
+
+  // -----------------------------------------------------
+  // Local utility shims (fix TS/undefined errors, safe defaults)
+  // -----------------------------------------------------
 
   const props = defineProps<{
     clothing?: {
@@ -152,6 +168,8 @@
   });
 
   const coverageBounds = ref<{ x: number; y: number; w: number; h: number } | null>(null);
+  const generateHighResPreviews = ref(false); // keep live UI light; export path still builds hi‑res
+  let previewRefreshTimeout: ReturnType<typeof setTimeout> | null = null;
   const coverageOverlayStyle = computed(() => {
     const bounds = coverageBounds.value;
     if (!bounds || bounds.w <= 0 || bounds.h <= 0) return null;
@@ -162,7 +180,10 @@
       height: `${Math.round(bounds.h)}px`,
     };
   });
-  const DEFAULT_PIXELS_PER_INCH = 40;
+  const DEFAULT_PIXELS_PER_INCH = 300;
+  // Keep the interactive canvas light; high‑res is generated only on export.
+  const LIVE_CANVAS_TARGET_PPI = 300;
+  const RENDER_SCALE = Math.max(5, LIVE_CANVAS_TARGET_PPI / DEFAULT_PIXELS_PER_INCH);
 
   interface InspectorItem {
     id: string;
@@ -741,7 +762,9 @@
     }
     if (!skipStore) {
       storeViewState(previous);
-      updatePreviewFor(previous, { skipBackground: !shirtBgLoaded.value });
+      void updatePreviewFor(previous, { skipBackground: !shirtBgLoaded.value }).catch((error) => {
+        console.warn('[ShirtPlacer] Failed to refresh preview', error);
+      });
     }
 
     selectedView.value = next;
@@ -857,6 +880,18 @@
   const canvasHeight = 600;
   const BACKGROUND_VERTICAL_OFFSET = -150;
 
+  function applyCanvasResolution() {
+    const el = canvas.value;
+    if (!el) return;
+    const width = Math.max(1, Math.round(canvasWidth * RENDER_SCALE));
+    const height = Math.max(1, Math.round(canvasHeight * RENDER_SCALE));
+    if (el.width !== width) el.width = width;
+    if (el.height !== height) el.height = height;
+    const style = el.style;
+    if (style.width !== `${canvasWidth}px`) style.width = `${canvasWidth}px`;
+    if (style.height !== `${canvasHeight}px`) style.height = `${canvasHeight}px`;
+  }
+
   const pendingAutoGrid = ref(false);
   let autoGridFrame: number | null = null;
 
@@ -896,7 +931,7 @@
   const shirtBgLoaded = ref(false);
   const shirtBgError = ref<string | null>(null);
   const shirtBgMirrored = ref(false);
-  const shirtBg = new window.Image();
+  const shirtBg = new Image();
   shirtBg.crossOrigin = 'anonymous';
 
   /**
@@ -970,6 +1005,130 @@
   const backBlankPreview = ref<string>('');
   const frontCanvasPreview = ref<string>('');
   const backCanvasPreview = ref<string>('');
+  const frontDesignHiRes = ref<string>('');
+  const backDesignHiRes = ref<string>('');
+  const frontDesignCacheRef = ref<CachedAssetRef | null>(null);
+  const backDesignCacheRef = ref<CachedAssetRef | null>(null);
+  const hydratedDesignRef: Record<View, CachedAssetRef | null> = {
+    Front: null,
+    Back: null,
+  };
+  const frontBlankCacheRefLocal = ref<CachedAssetRef | null>(null);
+  const backBlankCacheRefLocal = ref<CachedAssetRef | null>(null);
+  const designPersistVersion: Record<View, number> = {
+    Front: 0,
+    Back: 0,
+  };
+  const designHydrateVersion: Record<View, number> = {
+    Front: 0,
+    Back: 0,
+  };
+  const frontDisplayObjectUrl = ref<string | null>(null);
+  const backDisplayObjectUrl = ref<string | null>(null);
+  const CACHE_PURGE_ENABLED = true;
+
+  function pruneCachedAsset(ref: CachedAssetRef | null) {
+    if (!CACHE_PURGE_ENABLED || !ref) return;
+    if (!isCachedAssetRef(ref)) return;
+    void removeCachedAsset(ref);
+  }
+
+  type ViewPreviewChannel = {
+    label: View;
+    displayRef: typeof frontPreview;
+    hiResRef: typeof frontDesignHiRes;
+    blankRef: typeof frontBlankPreview;
+    canvasRef: typeof frontCanvasPreview;
+    blankCacheRefLocal: typeof frontBlankCacheRefLocal;
+    displayObjectUrlRef: typeof frontDisplayObjectUrl;
+  };
+
+  const viewPreviewChannels: Record<View, ViewPreviewChannel> = {
+    Front: {
+      label: 'Front',
+      displayRef: frontPreview,
+      hiResRef: frontDesignHiRes,
+      blankRef: frontBlankPreview,
+      canvasRef: frontCanvasPreview,
+      blankCacheRefLocal: frontBlankCacheRefLocal,
+      displayObjectUrlRef: frontDisplayObjectUrl,
+    },
+    Back: {
+      label: 'Back',
+      displayRef: backPreview,
+      hiResRef: backDesignHiRes,
+      blankRef: backBlankPreview,
+      canvasRef: backCanvasPreview,
+      blankCacheRefLocal: backBlankCacheRefLocal,
+      displayObjectUrlRef: backDisplayObjectUrl,
+    },
+  };
+
+  function previewDebug(view: View, message: string, payload?: Record<string, unknown>) {
+    const prefix = `[ShirtPlacer][${view}]`;
+    if (payload) {
+      console.log(`${prefix} ${message}`, payload);
+      return;
+    }
+    console.log(`${prefix} ${message}`);
+  }
+
+  function updateDisplayForView(view: View, nextUrl: string | null) {
+    const channel = viewPreviewChannels[view];
+    const previousBlob = channel.displayObjectUrlRef.value;
+    if (previousBlob && previousBlob !== nextUrl && previousBlob.startsWith('blob:')) {
+      URL.revokeObjectURL(previousBlob);
+    }
+    if (nextUrl && nextUrl.startsWith('blob:')) {
+      channel.displayObjectUrlRef.value = nextUrl;
+    } else {
+      channel.displayObjectUrlRef.value = null;
+    }
+    channel.displayRef.value = nextUrl ?? '';
+    previewDebug(view, 'display preview updated', {
+      next: describePreviewSource(nextUrl),
+    });
+  }
+
+  function swapBlankCacheRef(view: View, nextRefRaw: string | null) {
+    const channel = viewPreviewChannels[view];
+    const normalized = typeof nextRefRaw === 'string' && nextRefRaw.trim().length
+      ? nextRefRaw.trim()
+      : null;
+    const nextRef = normalized && isCachedAssetRef(normalized)
+      ? normalized as CachedAssetRef
+      : null;
+    const previous = channel.blankCacheRefLocal.value;
+    if (previous && previous !== nextRef && isCachedAssetRef(previous)) {
+      pruneCachedAsset(previous);
+    }
+    channel.blankCacheRefLocal.value = nextRef;
+    checkoutStore.setBlankDesignCacheRef(view, nextRef);
+    previewDebug(view, 'blank cache ref swapped', {
+      nextRef,
+    });
+  }
+
+  function cleanupPreviewCaches(view: View) {
+    const channel = viewPreviewChannels[view];
+    if (channel.blankCacheRefLocal.value && isCachedAssetRef(channel.blankCacheRefLocal.value)) {
+      pruneCachedAsset(channel.blankCacheRefLocal.value);
+    }
+    channel.blankCacheRefLocal.value = null;
+    checkoutStore.setBlankDesignCacheRef(view, null);
+    const activeDesignCache = checkoutStore.designPreviewCacheRefs[view];
+    if (activeDesignCache && isCachedAssetRef(activeDesignCache)) {
+      pruneCachedAsset(activeDesignCache);
+    }
+    checkoutStore.setDesignPreviewCacheRef(view, null);
+    if (view === 'Front') {
+      frontDesignCacheRef.value = null;
+    } else {
+      backDesignCacheRef.value = null;
+    }
+    hydratedDesignRef[view] = null;
+    previewDebug(view, 'design cache + blank cache cleared');
+  }
 
   function hasDesignForView(view: View): boolean {
     if (view === selectedView.value) {
@@ -982,55 +1141,306 @@
     return (state.images?.length ?? 0) > 0 || (state.texts?.length ?? 0) > 0;
   }
 
-  watch(frontPreview, (url) => {
-    const hasDesign = hasDesignForView('Front');
-    checkoutStore.setDesignPreview('Front', hasDesign ? (url || null) : null);
+  function refreshCheckoutDesignPreview(view: View, reason: string) {
+    const channel = viewPreviewChannels[view];
+    const hiRes = normalizePreview(channel.hiResRef.value);
+    const display = normalizePreview(channel.displayRef.value);
+    const hasDesign = hasDesignForView(view);
     if (!hasDesign) {
-      checkoutStore.setBlankDesignPreview('Front', null);
-      checkoutStore.setCanvasPreview('Front', null);
-    }
-  }, { immediate: true });
-
-  watch(backPreview, (url) => {
-    const hasDesign = hasDesignForView('Back');
-    checkoutStore.setDesignPreview('Back', hasDesign ? (url || null) : null);
-    if (!hasDesign) {
-      checkoutStore.setBlankDesignPreview('Back', null);
-      checkoutStore.setCanvasPreview('Back', null);
-    }
-  }, { immediate: true });
-
-  watch(frontBlankPreview, (url) => {
-    if (!hasDesignForView('Front')) {
-      checkoutStore.setBlankDesignPreview('Front', null);
+      previewDebug(view, 'no active design detected; clearing preview state', { reason });
+      channel.hiResRef.value = '';
+      channel.displayRef.value = '';
+      channel.blankRef.value = '';
+      channel.canvasRef.value = '';
+      checkoutStore.setDesignPreview(view, null);
+      checkoutStore.setBlankDesignPreview(view, null);
+      checkoutStore.setCanvasPreview(view, null);
+      cleanupPreviewCaches(view);
       return;
     }
-    checkoutStore.setBlankDesignPreview('Front', url || null);
-  }, { immediate: true });
+    // Prefer the WITH-shirt composite for the main design preview (used by uploads),
+    // and only fall back to hi-res if we somehow lack a display image.
+    const nextPreview = display ?? hiRes ?? null;
+    checkoutStore.setDesignPreview(view, nextPreview);
+    previewDebug(view, 'design preview synced', {
+      reason,
+      hiRes: describePreviewSource(hiRes),
+      display: describePreviewSource(display),
+      final: describePreviewSource(nextPreview),
+    });
+  }
 
-  watch(backBlankPreview, (url) => {
-    if (!hasDesignForView('Back')) {
-      checkoutStore.setBlankDesignPreview('Back', null);
+  async function hydrateDesignCacheForView(view: View, ref: CachedAssetRef | null) {
+    const version = ++designHydrateVersion[view];
+    const target = view === 'Front' ? frontDesignHiRes : backDesignHiRes;
+    const previousRef = hydratedDesignRef[view];
+    if (!ref || !isCachedAssetRef(ref)) {
+      previewDebug(view, 'hydrate skipped: missing cache ref', { version, ref });
+      if (previousRef && isCachedAssetRef(previousRef)) {
+        revokeCachedObjectUrl(previousRef);
+      }
+      hydratedDesignRef[view] = null;
+      const prevUrl = target.value;
+      if (prevUrl && prevUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(prevUrl);
+      }
+      if (version === designHydrateVersion[view]) {
+        target.value = '';
+        refreshCheckoutDesignPreview(view, 'hydrate-cache-miss');
+      }
       return;
     }
-    checkoutStore.setBlankDesignPreview('Back', url || null);
-  }, { immediate: true });
-
-  watch(frontCanvasPreview, (url) => {
-    if (!hasDesignForView('Front')) {
-      checkoutStore.setCanvasPreview('Front', null);
+    if (previousRef && previousRef !== ref && isCachedAssetRef(previousRef)) {
+      revokeCachedObjectUrl(previousRef);
+    }
+    hydratedDesignRef[view] = ref;
+    previewDebug(view, 'hydrate requested', { version, ref });
+    const objectUrl = await touchCachedObjectUrl(ref);
+    if (version !== designHydrateVersion[view]) {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      previewDebug(view, 'hydrate aborted due to version mismatch', { version, ref });
       return;
     }
-    checkoutStore.setCanvasPreview('Front', url || null);
-  }, { immediate: true });
+    const prevUrl = target.value;
+    if (prevUrl && prevUrl.startsWith('blob:') && prevUrl !== objectUrl) {
+      URL.revokeObjectURL(prevUrl);
+    }
+    target.value = objectUrl ?? '';
+    previewDebug(view, 'hydrate complete', {
+      version,
+      objectUrl: describePreviewSource(objectUrl),
+    });
+    refreshCheckoutDesignPreview(view, 'hydrate-cache-hit');
+  }
 
-  watch(backCanvasPreview, (url) => {
-    if (!hasDesignForView('Back')) {
-      checkoutStore.setCanvasPreview('Back', null);
+  async function persistDesignHiRes(view: View, source: string | null) {
+    const version = ++designPersistVersion[view];
+    const currentRef = checkoutStore.designPreviewCacheRefs[view];
+    const target = view === 'Front' ? frontDesignHiRes : backDesignHiRes;
+    const normalizedSource = source ? source.trim() : '';
+
+    previewDebug(view, 'persist hi-res requested', {
+      version,
+      source: describePreviewSource(normalizedSource || null),
+      currentRef,
+    });
+
+    if (target.value && target.value.startsWith('blob:')) {
+      URL.revokeObjectURL(target.value);
+    }
+    target.value = '';
+
+    if (!normalizedSource) {
+      if (currentRef && isCachedAssetRef(currentRef)) {
+        pruneCachedAsset(currentRef);
+      }
+      if (version === designPersistVersion[view]) {
+        checkoutStore.setDesignPreviewCacheRef(view, null);
+      }
       return;
     }
-    checkoutStore.setCanvasPreview('Back', url || null);
-  }, { immediate: true });
+
+    if (!normalizedSource.startsWith('data:')) {
+      if (version === designPersistVersion[view]) {
+        checkoutStore.setDesignPreviewCacheRef(view, null);
+        target.value = normalizedSource;
+        checkoutStore.setDesignPreview(view, normalizedSource);
+        previewDebug(view, 'persist hi-res bypass (non data URL)', {
+          version,
+          resolved: describePreviewSource(normalizedSource),
+        });
+      }
+      return;
+    }
+
+    const storedRef = await storeDataUrlInCache(normalizedSource, `${view.toLowerCase()}-design`);
+    if (version !== designPersistVersion[view]) {
+      if (storedRef) {
+        pruneCachedAsset(storedRef);
+      }
+      previewDebug(view, 'persist hi-res cancelled after async store', { version });
+      return;
+    }
+
+    if (!storedRef) {
+      checkoutStore.setDesignPreviewCacheRef(view, null);
+      target.value = normalizedSource;
+      checkoutStore.setDesignPreview(view, normalizedSource);
+      previewDebug(view, 'persist hi-res fallback to raw data URL', {
+        version,
+        resolved: describePreviewSource(normalizedSource),
+      });
+      return;
+    }
+
+    if (currentRef && currentRef !== storedRef && isCachedAssetRef(currentRef)) {
+      pruneCachedAsset(currentRef);
+    }
+    checkoutStore.setDesignPreviewCacheRef(view, storedRef);
+    previewDebug(view, 'persist hi-res stored cache ref', {
+      version,
+      storedRef,
+    });
+  }
+
+  const PREVIEW_REFRESH_DEBOUNCE_MS = 120;
+  const BLANK_HYDRATION_DEBOUNCE_MS = 90;
+  const DESIGN_CACHE_SYNC_DEBOUNCE_MS = 80;
+
+  const previewRefreshTimers: Record<View, ReturnType<typeof setTimeout> | null> = {
+    Front: null,
+    Back: null,
+  };
+  const designCacheSyncTimers: Record<View, ReturnType<typeof setTimeout> | null> = {
+    Front: null,
+    Back: null,
+  };
+  const blankHydrationTimers: Record<View, ReturnType<typeof setTimeout> | null> = {
+    Front: null,
+    Back: null,
+  };
+  const latestDesignCacheRefs: Record<View, string | null> = {
+    Front: null,
+    Back: null,
+  };
+  const latestBlankHydrationArgs: Record<View, {
+    cacheRef: string | null | undefined;
+    canvas: string | null | undefined;
+    data: string | null | undefined;
+  } | null> = {
+    Front: null,
+    Back: null,
+  };
+
+  function scheduleCheckoutPreviewRefresh(view: View) {
+    if (previewRefreshTimers[view]) {
+      clearTimeout(previewRefreshTimers[view]!);
+    }
+    previewRefreshTimers[view] = setTimeout(() => {
+      previewRefreshTimers[view] = null;
+      refreshCheckoutDesignPreview(view, 'design-preview-change');
+    }, PREVIEW_REFRESH_DEBOUNCE_MS);
+  }
+
+  function applyDesignCacheRef(view: View) {
+    const refValue = latestDesignCacheRefs[view];
+    previewDebug(view, 'store design cache ref applied', { refValue });
+    const resolvedRef = refValue && isCachedAssetRef(refValue) ? refValue : null;
+    if (view === 'Front') {
+      frontDesignCacheRef.value = resolvedRef;
+    } else {
+      backDesignCacheRef.value = resolvedRef;
+    }
+    void hydrateDesignCacheForView(view, resolvedRef);
+  }
+
+  function scheduleDesignCacheSync(view: View) {
+    if (designCacheSyncTimers[view]) {
+      clearTimeout(designCacheSyncTimers[view]!);
+    }
+    designCacheSyncTimers[view] = setTimeout(() => {
+      designCacheSyncTimers[view] = null;
+      applyDesignCacheRef(view);
+    }, DESIGN_CACHE_SYNC_DEBOUNCE_MS);
+  }
+
+  function scheduleBlankHydration(view: View) {
+    if (blankHydrationTimers[view]) {
+      clearTimeout(blankHydrationTimers[view]!);
+    }
+    blankHydrationTimers[view] = setTimeout(() => {
+      blankHydrationTimers[view] = null;
+      const args = latestBlankHydrationArgs[view];
+      if (!args) return;
+      void hydrateBlankPreview(view, args.cacheRef ?? null, args.canvas ?? null, args.data ?? null);
+    }, BLANK_HYDRATION_DEBOUNCE_MS);
+  }
+
+  watch(
+    () => checkoutStore.designPreviewCacheRefs.Front,
+    (refValue) => {
+      previewDebug('Front', 'store design cache ref changed', { refValue });
+      latestDesignCacheRefs.Front = refValue ?? null;
+      scheduleDesignCacheSync('Front');
+    },
+    { immediate: true },
+  );
+
+  watch(
+    () => checkoutStore.designPreviewCacheRefs.Back,
+    (refValue) => {
+      previewDebug('Back', 'store design cache ref changed', { refValue });
+      latestDesignCacheRefs.Back = refValue ?? null;
+      scheduleDesignCacheSync('Back');
+    },
+    { immediate: true },
+  );
+  // --- Hydration for BLANK (design-only) previews ---
+  async function hydrateBlankPreview(
+    view: View,
+    cacheRefRaw: string | null | undefined,
+    canvasUrl: string | null | undefined,
+    dataUrl: string | null | undefined,
+  ) {
+    const normalizedCacheRef = typeof cacheRefRaw === 'string' && cacheRefRaw.trim().length
+      ? cacheRefRaw.trim()
+      : null;
+    let resolved: string | null = null;
+    if (normalizedCacheRef && isCachedAssetRef(normalizedCacheRef)) {
+      resolved = await touchCachedObjectUrl(normalizedCacheRef);
+      previewDebug(view, 'blank preview hydrated from cache', {
+        cacheRef: normalizedCacheRef,
+        resolved: describePreviewSource(resolved),
+      });
+    }
+    if (!resolved && canvasUrl) {
+      resolved = canvasUrl;
+      previewDebug(view, 'blank preview fell back to canvas render', {
+        resolved: describePreviewSource(resolved),
+      });
+    }
+    if (!resolved && dataUrl) {
+      resolved = dataUrl;
+      previewDebug(view, 'blank preview fell back to raw data URL', {
+        resolved: describePreviewSource(resolved),
+      });
+    }
+    checkoutStore.setBlankDesignPreview(view, resolved);
+  }
+  watch(
+    [() => checkoutStore.blankDesignCacheRefs.Front, frontCanvasPreview, frontBlankPreview],
+    ([refValue, canvasUrl, dataUrl]) => {
+      latestBlankHydrationArgs.Front = { cacheRef: refValue, canvas: canvasUrl, data: dataUrl };
+      scheduleBlankHydration('Front');
+    },
+    { immediate: true },
+  );
+
+  watch(
+    [() => checkoutStore.blankDesignCacheRefs.Back, backCanvasPreview, backBlankPreview],
+    ([refValue, canvasUrl, dataUrl]) => {
+      latestBlankHydrationArgs.Back = { cacheRef: refValue, canvas: canvasUrl, data: dataUrl };
+      scheduleBlankHydration('Back');
+    },
+    { immediate: true },
+  );
+  watch(
+    [frontDesignHiRes, frontPreview],
+    () => {
+      scheduleCheckoutPreviewRefresh('Front');
+    },
+    { immediate: true },
+  );
+
+  watch(
+    [backDesignHiRes, backPreview],
+    () => {
+      scheduleCheckoutPreviewRefresh('Back');
+    },
+    { immediate: true },
+  );
 
   watch(selectedView, (view) => {
     checkoutStore.setActiveDesignView(view);
@@ -1048,27 +1458,69 @@
   function refreshAllPreviews() {
     for (const view of ALL_VIEWS) {
       const src = viewToSrc[view] || fallbackPreview;
-      setPreview(view, { designUrl: src, blankUrl: '', canvasUrl: src });
+      setPreview(view, {
+        designDisplayUrl: src,
+        designHiResUrl: src,
+        blankUrl: '',
+        canvasUrl: src,
+      });
     }
     syncDesignState();
   }
 
   type PreviewPayload = {
-    designUrl: string;
+    designDisplayUrl: string | null;
+    designHiResUrl?: string | null;
     blankUrl?: string | null;
+    blankCacheRef?: string | null;
     canvasUrl?: string | null;
   };
 
   function setPreview(view: View, payload: PreviewPayload) {
-    const { designUrl, blankUrl = null, canvasUrl = null } = payload;
-    if (view === 'Front') {
-      frontPreview.value = designUrl;
-      frontBlankPreview.value = blankUrl ?? '';
-      frontCanvasPreview.value = canvasUrl ?? '';
-    } else if (view === 'Back') {
-      backPreview.value = designUrl;
-      backBlankPreview.value = blankUrl ?? '';
-      backCanvasPreview.value = canvasUrl ?? '';
+    const {
+      designDisplayUrl,
+      designHiResUrl = undefined,
+      blankUrl = null,
+      blankCacheRef = null,
+      canvasUrl = null,
+    } = payload;
+    previewDebug(view, 'incoming preview payload', {
+      display: describePreviewSource(designDisplayUrl),
+      hiRes: describePreviewSource(designHiResUrl),
+      blank: describePreviewSource(blankUrl),
+      canvas: describePreviewSource(canvasUrl),
+      blankCacheRef,
+    });
+
+    updateDisplayForView(view, designDisplayUrl ?? null);
+
+    if (designHiResUrl !== undefined) {
+      const normalizedHiRes = normalizePreview(designHiResUrl);
+      previewDebug(view, 'hi-res payload received', {
+        normalized: describePreviewSource(normalizedHiRes),
+      });
+      void persistDesignHiRes(view, normalizedHiRes);
+    }
+
+    const channel = viewPreviewChannels[view];
+    channel.blankRef.value = blankUrl ?? '';
+    swapBlankCacheRef(view, blankCacheRef);
+    const normalizedBlank = normalizePreview(blankUrl);
+    checkoutStore.setBlankDesignPreview(view, normalizedBlank);
+    previewDebug(view, 'blank preview stored (pre-hydration)', {
+      normalized: describePreviewSource(normalizedBlank),
+    });
+
+    channel.canvasRef.value = canvasUrl ?? '';
+    const normalizedCanvas = normalizePreview(canvasUrl);
+    checkoutStore.setCanvasPreview(view, normalizedCanvas);
+    previewDebug(view, 'canvas preview stored', {
+      normalized: describePreviewSource(normalizedCanvas),
+    });
+
+    const designDisplayNormalized = normalizePreview(designDisplayUrl);
+    if (designDisplayNormalized) {
+      checkoutStore.setDesignPreview(view, designDisplayNormalized);
     }
   }
 
@@ -1110,6 +1562,9 @@
     const elementType = inferImageElementType(source);
     const elementVariant = inferImageVariant(source, elementType);
     const name = inferImageName(source, elementType, elementVariant);
+    const rawSource = (source as ImageObject).imgUrl ?? '';
+    const originalSource = (source as ImageObject).originalSource ?? rawSource ?? null;
+    const cacheRef = (source as ImageObject).assetCacheRef ?? null;
     return {
       ...(source as ImageObject),
       img: undefined,
@@ -1120,6 +1575,8 @@
       elementVariant,
       name,
       view: (source as ImageObject).view ?? view,
+      assetCacheRef: typeof cacheRef === 'string' && cacheRef.trim().length ? cacheRef : null,
+      originalSource: typeof originalSource === 'string' && originalSource.trim().length ? originalSource : (rawSource ?? null),
     };
   }
 
@@ -1190,6 +1647,8 @@
       isVector: item.isVector ?? rest.isVector,
       name: item.name,
       shapeMeta: item.shapeMeta ? { ...item.shapeMeta } : undefined,
+      assetCacheRef: typeof item.assetCacheRef === 'string' && item.assetCacheRef.trim().length ? item.assetCacheRef : undefined,
+      originalSource: typeof item.originalSource === 'string' && item.originalSource.trim().length ? item.originalSource : undefined,
     };
   }
 
@@ -1303,9 +1762,360 @@
     draw();
   }
 
-  function updatePreviewFor(view: View, { skipBackground = false } = {}) {
+  async function updatePreviewFor(view: View, { skipBackground = false } = {}) {
+    const startTime =
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+    let exitTag: 'success-main' | 'success-fallback' | 'error' | 'unknown' = 'unknown';
+    console.log('[ShirtPlacer] updatePreviewFor:start', { view, skipBackground });
+    const originalView = selectedView.value as View;
+    let switchedView = false;
+
+    if (originalView !== view) {
+      storeViewState(originalView);
+      selectedView.value = view;
+      loadViewState(view);
+      switchedView = true;
+    }
+
     storeViewState(view);
-    if (skipBackground) return;
+    const DESIGN_ONLY_EXPORT_PPI = 300;
+    const WITH_SHIRT_EXPORT_PPI = 72;
+    const gridRect = resolveGrid();
+    const gridDetails = clothingDetails.value.grid ?? {};
+    const gridPpi = getPixelsPerInch();
+    const effectivePpi = Number.isFinite(gridPpi) && gridPpi > 0 ? gridPpi : DEFAULT_PIXELS_PER_INCH;
+    const gridWidthPx = Math.max(gridRect.w, 1);
+    const gridHeightPx = Math.max(gridRect.h, 1);
+    const rawGridWidthInches = toNumeric((gridDetails as any).widthInches ?? (gridDetails as any).physicalWidth ?? (gridDetails as any).widthIn ?? (gridDetails as any).width_in);
+    const rawGridHeightInches = toNumeric((gridDetails as any).heightInches ?? (gridDetails as any).physicalHeight ?? (gridDetails as any).heightIn ?? (gridDetails as any).height_in);
+    const gridWidthInches = rawGridWidthInches && rawGridWidthInches > 0
+      ? rawGridWidthInches
+      : gridWidthPx / Math.max(effectivePpi, 1);
+    const gridHeightInches = rawGridHeightInches && rawGridHeightInches > 0
+      ? rawGridHeightInches
+      : gridHeightPx / Math.max(effectivePpi, 1);
+    const targetGridWidthPx = Math.max(1, Math.round(gridWidthInches * DESIGN_ONLY_EXPORT_PPI));
+    const targetGridHeightPx = Math.max(1, Math.round(gridHeightInches * DESIGN_ONLY_EXPORT_PPI));
+    const MAX_EXPORT_SCALE = 200;
+    const scaleX = targetGridWidthPx / gridWidthPx;
+    const scaleY = targetGridHeightPx / gridHeightPx;
+    const exportScale = Math.max(1, Math.min(Math.max(scaleX, scaleY), MAX_EXPORT_SCALE));
+    const DISPLAY_PREVIEW_PPI = 300;
+
+    const applyDpi = (dataUrl: string | null, dpi: number): string | null => {
+      if (!dataUrl) return dataUrl;
+      try {
+        return changeDpiDataUrl(dataUrl, dpi);
+      } catch (error) {
+        console.warn('[updatePreviewFor] Unable to stamp DPI metadata.', error);
+        return dataUrl;
+      }
+    };
+
+    const cropDesignRegion = (source: HTMLCanvasElement, scale: number): HTMLCanvasElement => {
+      const cropCanvas = document.createElement('canvas');
+      const cropWidth = Math.max(1, Math.round(gridRect.w * scale));
+      const cropHeight = Math.max(1, Math.round(gridRect.h * scale));
+      cropCanvas.width = cropWidth;
+      cropCanvas.height = cropHeight;
+      const cropCtx = cropCanvas.getContext('2d');
+      if (!cropCtx) return source;
+      cropCtx.drawImage(
+        source,
+        Math.round(gridRect.x * scale),
+        Math.round(gridRect.y * scale),
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        cropWidth,
+        cropHeight,
+      );
+      return cropCanvas;
+    };
+
+    const trimTransparentWhitespace = (
+      source: HTMLCanvasElement,
+      paddingPx = 0,
+    ): HTMLCanvasElement => {
+      const ctx = source.getContext('2d');
+      if (!ctx) return source;
+      const { width, height } = source;
+      if (!width || !height) return source;
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+      let data: ImageData | null = null;
+      try {
+        data = ctx.getImageData(0, 0, width, height);
+      } catch (error) {
+        console.warn('[ShirtPlacer] Failed to inspect canvas pixels for trimming', error);
+        return source;
+      }
+      if (!data) return source;
+      const pixels = data.data;
+      const alphaThreshold = 8;
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const alpha = pixels[(y * width + x) * 4 + 3];
+          if (alpha > alphaThreshold) {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      if (maxX < minX || maxY < minY) {
+        return source;
+      }
+      const pad = Math.max(0, Math.round(paddingPx));
+      const cropX = Math.max(0, minX - pad);
+      const cropY = Math.max(0, minY - pad);
+      const cropWidth = Math.min(width - cropX, maxX - minX + 1 + pad * 2);
+      const cropHeight = Math.min(height - cropY, maxY - minY + 1 + pad * 2);
+      if (cropWidth <= 0 || cropHeight <= 0) {
+        return source;
+      }
+      const trimmed = document.createElement('canvas');
+      trimmed.width = cropWidth;
+      trimmed.height = cropHeight;
+      const trimmedCtx = trimmed.getContext('2d');
+      if (!trimmedCtx) return source;
+      trimmedCtx.drawImage(source, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+      return trimmed;
+    };
+
+    function logImageInfo(options: {
+      view: View;
+      label: string;
+      width: number | null;
+      height: number | null;
+      dpi: number | null;
+      dataUrl: string | null | undefined;
+    }) {
+      const { view, label, width, height, dpi, dataUrl } = options;
+      const widthPx = width ?? null;
+      const heightPx = height ?? null;
+      const widthInches = widthPx && dpi ? Number(widthPx / dpi).toFixed(2) : null;
+      const heightInches = heightPx && dpi ? Number(heightPx / dpi).toFixed(2) : null;
+      const summary: Record<string, unknown> = {
+        view,
+        label,
+        widthPx,
+        heightPx,
+        widthInches,
+        heightInches,
+        dpi,
+      };
+      if (typeof dataUrl === 'string' && dataUrl.length) {
+        summary.dataUrlLength = dataUrl.length;
+        summary.dataUrlPreview = `${dataUrl.slice(0, 64)}…`;
+        summary.approxBytes = Math.round((dataUrl.length * 3) / 4);
+      } else {
+        summary.message = 'No data URL available';
+      }
+      console.info('[Design Export]', summary);
+    }
+
+    type RenderResult = {
+      canvas: HTMLCanvasElement;
+      dataUrl: string | null;
+      width: number;
+      height: number;
+      isHighRes: boolean;
+      dpi: number;
+    };
+
+    // Ensure all image elements are loaded before capturing a design-only layer
+    async function waitForImagesToLoad(timeoutMs = 1200) {
+      const pending: Promise<void>[] = [];
+      for (const it of images) {
+        const el: any = (it as any)?.img;
+        if (!el) continue;
+        const complete = typeof el.complete === 'boolean' ? el.complete : (typeof el.naturalWidth === 'number' && el.naturalWidth > 0);
+        if (complete) continue;
+        pending.push(new Promise((resolve) => {
+          const done = () => {
+            el.removeEventListener?.('load', done);
+            el.removeEventListener?.('error', done);
+            resolve();
+          };
+          try {
+            el.addEventListener?.('load', done);
+            el.addEventListener?.('error', done);
+          } catch {
+            resolve();
+          }
+        }));
+      }
+      if (!pending.length) return;
+      await Promise.race([
+        Promise.all(pending).catch(() => void 0),
+        new Promise<void>((r) => setTimeout(r, timeoutMs)),
+      ]);
+    }
+
+    type CropMode = 'none' | 'grid' | 'content';
+
+    const applyCropStrategy = (
+      canvas: HTMLCanvasElement,
+      scale: number,
+      mode: CropMode,
+    ): HTMLCanvasElement => {
+      if (mode === 'none') return canvas;
+      const gridCropped = cropDesignRegion(canvas, scale);
+      if (mode === 'grid') return gridCropped;
+      if (mode === 'content') {
+        // Small padding to avoid clipping antialiasing
+        return trimTransparentWhitespace(gridCropped, Math.max(2, Math.round(4 * scale)));
+      }
+      return canvas;
+    };
+
+    // Export canvases are already sized from grid inches × 300 DPI.
+    // Avoid aggressively upscaling beyond that – it softens details.
+    const MIN_DESIGN_ONLY_LONG_SIDE_PX = 0; // no forced upscale for design‑only exports
+    const MIN_WITH_SHIRT_LONG_SIDE_PX = 0;  // no forced upscale for shirt composites
+    const MAX_EXPORT_LONG_SIDE_PX = 7000; // cap to prevent runaway memory
+
+    const ensureMinimumResolution = (
+      source: HTMLCanvasElement,
+      minLongSide: number,
+    ): HTMLCanvasElement => {
+      if (!minLongSide || minLongSide <= 0) return source;
+      const longestSide = Math.max(source.width, source.height);
+      if (longestSide >= minLongSide) return source;
+      const targetLongSide = Math.min(minLongSide, MAX_EXPORT_LONG_SIDE_PX);
+      if (!longestSide || longestSide <= 0) return source;
+      const scale = targetLongSide / longestSide;
+      const targetWidth = Math.max(1, Math.round(source.width * scale));
+      const targetHeight = Math.max(1, Math.round(source.height * scale));
+      const scaled = document.createElement('canvas');
+      scaled.width = targetWidth;
+      scaled.height = targetHeight;
+      const ctx = scaled.getContext('2d');
+      if (!ctx) return source;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
+      return scaled;
+    };
+    const canvasToPngDataUrl = (canvas: HTMLCanvasElement): Promise<string | null> =>
+      new Promise((resolve) => {
+        try {
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                resolve(null);
+                return;
+              }
+
+              // Stamp PNG to 300 DPI using changedpi's changeDpiBlob
+              changeDpiBlob(blob, 300)
+                .then((stampedBlob) => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    resolve(typeof reader.result === 'string' ? reader.result : null);
+                  };
+                  reader.onerror = () => {
+                    console.warn('[ShirtPlacer] Failed to read canvas blob as data URL');
+                    resolve(null);
+                  };
+                  reader.readAsDataURL(stampedBlob);
+                })
+                .catch((error) => {
+                  console.warn('[ShirtPlacer] changeDpiBlob failed, falling back to original blob', error);
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    resolve(typeof reader.result === 'string' ? reader.result : null);
+                  };
+                  reader.onerror = () => {
+                    console.warn('[ShirtPlacer] Failed to read canvas blob as data URL');
+                    resolve(null);
+                  };
+                  reader.readAsDataURL(blob);
+                });
+            },
+            'image/png',
+            1.0,
+          );
+        } catch (error) {
+          console.warn('[ShirtPlacer] canvas.toBlob failed, falling back to toDataURL', error);
+          try {
+            resolve(canvas.toDataURL('image/png'));
+          } catch {
+            resolve(null);
+          }
+        }
+      });
+    const renderLayer = async (
+      includeBackground: boolean,
+      cropMode: CropMode,
+      scaleOverride?: number,
+    ): Promise<RenderResult | null> => {
+      const shouldHighResFlag = generateHighResPreviews.value;
+      const exportDpi = includeBackground ? WITH_SHIRT_EXPORT_PPI : DESIGN_ONLY_EXPORT_PPI;
+
+      // If a scaleOverride is provided, use it. Otherwise fall back to the old behavior:
+      // high-res uses exportScale, low-res uses 1x.
+      const scale =
+        typeof scaleOverride === 'number' && scaleOverride > 0
+          ? scaleOverride
+          : (shouldHighResFlag ? exportScale : 1);
+
+      // High-res path: render at scaled resolution (no extra downscale after crop).
+      if (scale > 1) {
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = Math.max(1, Math.round(canvasWidth * scale));
+        exportCanvas.height = Math.max(1, Math.round(canvasHeight * scale));
+        const exportCtx = exportCanvas.getContext('2d');
+        if (exportCtx) {
+          exportCtx.imageSmoothingEnabled = true;
+          exportCtx.imageSmoothingQuality = 'high';
+          exportCtx.scale(scale, scale);
+          exportCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+          buildFull(exportCtx, includeBackground, includeBackground ? { fillColor: '#ffffff' } : { fillColor: null });
+
+          // Crop in the same scaled coordinate space; do NOT downscale afterward.
+          const sourceCanvas = applyCropStrategy(exportCanvas, scale, cropMode);
+          const rawDataUrl = await canvasToPngDataUrl(sourceCanvas);
+          const dataUrl = applyDpi(rawDataUrl, exportDpi) ?? rawDataUrl;
+          return {
+            canvas: sourceCanvas,
+            dataUrl,
+            width: sourceCanvas.width,
+            height: sourceCanvas.height,
+            isHighRes: true,
+            dpi: exportDpi,
+          };
+        }
+      }
+
+      // Low-res path: 1x canvasWidth/canvasHeight, used for cheap UI previews.
+      const previewCanvas = document.createElement('canvas');
+      previewCanvas.width = canvasWidth;
+      previewCanvas.height = canvasHeight;
+      const previewCtx = previewCanvas.getContext('2d');
+      if (!previewCtx) return Promise.resolve(null);
+      previewCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+      buildFull(previewCtx, includeBackground, includeBackground ? { fillColor: '#ffffff' } : { fillColor: null });
+      const sourceCanvas = applyCropStrategy(previewCanvas, 1, cropMode);
+      const rawDataUrl = await canvasToPngDataUrl(sourceCanvas);
+      const dataUrl = applyDpi(rawDataUrl, exportDpi) ?? rawDataUrl;
+      return {
+        canvas: sourceCanvas,
+        dataUrl,
+        width: sourceCanvas.width,
+        height: sourceCanvas.height,
+        isHighRes: false,
+        dpi: exportDpi,
+      };
+    };
+
     // Build a full-canvas preview (background + objects only; no grid or rulers)
     const buildFull = (
       ctx: CanvasRenderingContext2D,
@@ -1333,14 +2143,21 @@
       for (const obj of ordered) {
         if (obj.type === 'image') {
           const item = obj as any;
-          if (!item.img || !(item.img instanceof Image)) continue; // skip until loaded
+          const imageEl = item?.img as any;
+          // Be permissive: Vue reactivity can wrap values; don't rely on instanceof checks
+          const canDraw = imageEl && (
+            (typeof HTMLImageElement !== 'undefined' && imageEl instanceof HTMLImageElement) ||
+            (typeof imageEl.tagName === 'string' && imageEl.tagName.toLowerCase() === 'img') ||
+            (typeof imageEl.naturalWidth === 'number')
+          );
+          if (!canDraw) continue; // skip until available
 
           ctx.save();
           const cx = item.x + item.w / 2;
           const cy = item.y + item.h / 2;
           ctx.translate(cx, cy);
           ctx.rotate(((item.rotation || 0) * Math.PI) / 180);
-          ctx.drawImage(item.img, -item.w / 2, -item.h / 2, item.w, item.h);
+          ctx.drawImage(imageEl, -item.w / 2, -item.h / 2, item.w, item.h);
           ctx.restore();
         } else if (obj.type === 'text') {
           const t = obj as any;
@@ -1389,99 +2206,144 @@
       }
     };
 
-    // Helper: Crop a canvas to the non-transparent content
-    function cropCanvasToContent(sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
-      const ctx = sourceCanvas.getContext('2d');
-      if (!ctx) return sourceCanvas;
-      const { width, height } = sourceCanvas;
-      const imageData = ctx.getImageData(0, 0, width, height);
-      const data = imageData.data;
-      let minX = width, minY = height, maxX = -1, maxY = -1;
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const idx = (y * width + x) * 4;
-          if (data[idx + 3] > 0) { // alpha > 0 means not transparent
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-      // If no non-transparent pixel found, return a 1x1 transparent canvas
-      if (maxX < minX || maxY < minY) {
-        const empty = document.createElement('canvas');
-        empty.width = 1;
-        empty.height = 1;
-        return empty;
-      }
-      const cropW = maxX - minX + 1;
-      const cropH = maxY - minY + 1;
-      const croppedCanvas = document.createElement('canvas');
-      croppedCanvas.width = cropW;
-      croppedCanvas.height = cropH;
-      const croppedCtx = croppedCanvas.getContext('2d');
-      if (!croppedCtx) return sourceCanvas;
-      croppedCtx.drawImage(sourceCanvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
-      return croppedCanvas;
-    }
-
-    function createBlankDataUrl(width: number, height: number): string {
-      const safeWidth = Math.max(1, Math.floor(width));
-      const safeHeight = Math.max(1, Math.floor(height));
-      const blankCanvas = document.createElement('canvas');
-      blankCanvas.width = safeWidth;
-      blankCanvas.height = safeHeight;
-      const blankCtx = blankCanvas.getContext('2d');
-      if (blankCtx) {
-        blankCtx.fillStyle = '#ffffff';
-        blankCtx.fillRect(0, 0, safeWidth, safeHeight);
-      }
-      return blankCanvas.toDataURL('image/png');
-    }
+    const createDisplayUrl = (layer: RenderResult | null): Promise<string | null> => {
+      if (!layer) return Promise.resolve(null);
+      // For display, just reuse the encoded PNG data URL from renderLayer.
+      return Promise.resolve(layer.dataUrl ?? null);
+    };
 
     try {
-      // Always build an offscreen preview (never clone live canvas directly)
-      const previewCanvas = document.createElement('canvas');
-      previewCanvas.width = canvasWidth;
-      previewCanvas.height = canvasHeight;
-      const ctx = previewCanvas.getContext('2d');
-      if (!ctx) return;
+      // When background isn't ready or explicitly skipped, don't build a shirt layer.
+      const shirtLayer = skipBackground ? null : await renderLayer(true, 'none', 1);
+      // Generate design-only at full canvas resolution (RENDER_SCALE), wait briefly for images to be ready
+      await waitForImagesToLoad();
+      const artLayer = await renderLayer(false, 'content', RENDER_SCALE);
 
-      let canvasUrl: string | null = null;
-      try {
-        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-        buildFull(ctx, false, { fillColor: null });
-        canvasUrl = previewCanvas.toDataURL('image/png');
-      } catch (printErr) {
-        console.warn('[updatePreviewFor] Failed to capture full canvas preview; continuing without print canvas.', printErr);
-        canvasUrl = null;
+      const designHiResUrl = shirtLayer?.dataUrl ?? artLayer?.dataUrl ?? null;
+      const displaySource = shirtLayer ?? artLayer;
+      const designDisplayUrl = await createDisplayUrl(displaySource) ?? designHiResUrl;
+
+      let designOnlyDisplayUrl: string | null = null;
+      let designOnlyExportUrl: string | null = null;
+      let designOnlyCacheRef: string | null = null;
+      let designOnlyWidth: number | null = null;
+      let designOnlyHeight: number | null = null;
+      if (artLayer) {
+        designOnlyWidth = artLayer.width;
+        designOnlyHeight = artLayer.height;
+        designOnlyDisplayUrl = await createDisplayUrl(artLayer) ?? artLayer.dataUrl;
+        designOnlyExportUrl = applyDpi(artLayer.dataUrl, DESIGN_ONLY_EXPORT_PPI) ?? artLayer.dataUrl;
+        try {
+          if (designOnlyExportUrl) {
+            designOnlyCacheRef = await storeDataUrlInCache(designOnlyExportUrl, `${view.toLowerCase()}-design-only`);
+          } else {
+            designOnlyCacheRef = null;
+          }
+        } catch (error) {
+          console.warn('[ShirtPlacer] Failed to cache design-only preview', error);
+        }
       }
 
-      // Attempt with background included for display thumbnails
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-      buildFull(ctx, true, { fillColor: '#ffffff' });
-      try {
-        const cropped = cropCanvasToContent(previewCanvas);
-        const designUrl = cropped.toDataURL('image/png');
-        const blankUrl = createBlankDataUrl(cropped.width, cropped.height);
-        setPreview(view, { designUrl, blankUrl, canvasUrl: canvasUrl ?? designUrl });
+      if (designDisplayUrl || designHiResUrl) {
+        const shouldStoreDesignOnly = Boolean(designOnlyExportUrl);
+        setPreview(view, {
+          designDisplayUrl: designDisplayUrl ?? designHiResUrl ?? '',
+          designHiResUrl: designHiResUrl ?? designDisplayUrl ?? null,
+          blankUrl: shouldStoreDesignOnly ? designOnlyExportUrl : undefined,
+          blankCacheRef: shouldStoreDesignOnly ? designOnlyCacheRef : undefined,
+          canvasUrl: shouldStoreDesignOnly ? designOnlyExportUrl : designOnlyDisplayUrl ?? undefined,
+        });
         syncDesignState();
+        const designLayer = displaySource;
+        logImageInfo({
+          view,
+          label: 'With shirt',
+          width: designLayer?.width ?? null,
+          height: designLayer?.height ?? null,
+          dpi: WITH_SHIRT_EXPORT_PPI,
+          dataUrl: designHiResUrl ?? designDisplayUrl,
+        });
+        logImageInfo({
+          view,
+          label: 'Design only',
+          width: designOnlyWidth,
+          height: designOnlyHeight,
+          dpi: DESIGN_ONLY_EXPORT_PPI,
+          dataUrl: designOnlyExportUrl,
+        });
+        exitTag = 'success-main';
         return;
-      } catch (bgErr) {
-        console.warn('[updatePreviewFor] toDataURL failed with background (likely CORS). Falling back to no background.', bgErr);
       }
 
-      // Fallback: rebuild without background to avoid taint
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-      buildFull(ctx, false, { fillColor: '#ffffff' });
-      const cropped = cropCanvasToContent(previewCanvas);
-      const designUrl = cropped.toDataURL('image/png');
-      const blankUrl = createBlankDataUrl(cropped.width, cropped.height);
-      setPreview(view, { designUrl, blankUrl, canvasUrl: canvasUrl ?? designUrl });
-      syncDesignState();
+      const fallbackLayer = await renderLayer(false, 'content');
+      if (fallbackLayer) {
+        let fallbackDesignDisplay: string | null = null;
+        let fallbackDesignExport: string | null = null;
+        let fallbackDesignCacheRef: string | null = null;
+        let fallbackWidth: number | null = null;
+        let fallbackHeight: number | null = null;
+        if (fallbackLayer) {
+          fallbackWidth = fallbackLayer.width;
+          fallbackHeight = fallbackLayer.height;
+          fallbackDesignDisplay = await createDisplayUrl(fallbackLayer) ?? fallbackLayer.dataUrl;
+          fallbackDesignExport = applyDpi(fallbackLayer.dataUrl, DESIGN_ONLY_EXPORT_PPI) ?? fallbackLayer.dataUrl;
+          try {
+            if (fallbackDesignExport) {
+              const storedFallback = await storeDataUrlInCache(fallbackDesignExport, `${view.toLowerCase()}-design-only`);
+              if (storedFallback) {
+                fallbackDesignCacheRef = storedFallback;
+              }
+            }
+          } catch (error) {
+            console.warn('[ShirtPlacer] Failed to cache fallback design-only preview', error);
+          }
+        }
+        const fallbackDisplayUrl = await createDisplayUrl(fallbackLayer) ?? fallbackLayer.dataUrl;
+        const shouldStoreFallback = Boolean(fallbackDesignExport);
+        setPreview(view, {
+          designDisplayUrl: fallbackDisplayUrl ?? '',
+          designHiResUrl: fallbackLayer.dataUrl ?? fallbackDisplayUrl ?? null,
+          blankUrl: shouldStoreFallback ? fallbackDesignExport : undefined,
+          blankCacheRef: shouldStoreFallback ? fallbackDesignCacheRef : undefined,
+          canvasUrl: shouldStoreFallback ? fallbackDesignExport : fallbackDesignDisplay ?? undefined,
+        });
+        syncDesignState();
+        logImageInfo({
+          view,
+          label: 'With shirt (fallback)',
+          width: fallbackLayer.width,
+          height: fallbackLayer.height,
+          dpi: DESIGN_ONLY_EXPORT_PPI,
+          dataUrl: fallbackLayer.dataUrl,
+        });
+        logImageInfo({
+          view,
+          label: 'Design only (fallback)',
+          width: fallbackWidth,
+          height: fallbackHeight,
+          dpi: DESIGN_ONLY_EXPORT_PPI,
+          dataUrl: fallbackDesignExport,
+        });
+        exitTag = 'success-fallback';
+      }
     } catch (err) {
       console.warn('[updatePreviewFor] failed to build full-canvas preview:', err);
+      exitTag = 'error';
+    } finally {
+      if (switchedView) {
+        storeViewState(view);
+        selectedView.value = originalView;
+        loadViewState(originalView);
+      }
+      const endTime =
+        typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+      console.log('[ShirtPlacer] updatePreviewFor:finish', {
+        view,
+        exitTag,
+        durationMs: Math.round(endTime - startTime),
+      });
     }
   }
 
@@ -1502,6 +2364,48 @@
       };
       reader.readAsDataURL(file);
     }
+  }
+
+  async function generateHighResCheckoutPreviews() {
+    console.log('[ShirtPlacer] generateHighResCheckoutPreviews:start');
+    const previous = generateHighResPreviews.value;
+    generateHighResPreviews.value = true;
+    try {
+      previewDebug('Front', 'high-res checkout generation requested', {
+        skipBackground: !shirtBgLoaded.value,
+      });
+      await updatePreviewFor('Front', { skipBackground: !shirtBgLoaded.value });
+      previewDebug('Back', 'high-res checkout generation requested', {
+        skipBackground: !shirtBgLoaded.value,
+      });
+      await updatePreviewFor('Back', { skipBackground: !shirtBgLoaded.value });
+      console.info('[ShirtPlacer] High-res checkout previews refreshed for both views.');
+    } finally {
+      generateHighResPreviews.value = previous;
+      console.log('[ShirtPlacer] generateHighResCheckoutPreviews:finish');
+    }
+  }
+
+  function schedulePreviewRefresh() {
+    if (generateHighResPreviews.value) {
+      void updatePreviewFor(selectedView.value, { skipBackground: !shirtBgLoaded.value }).catch((error) => {
+        console.warn('[ShirtPlacer] Failed to refresh preview', error);
+      });
+      return;
+    }
+    if (previewRefreshTimeout !== null) {
+      clearTimeout(previewRefreshTimeout);
+    }
+    previewRefreshTimeout = setTimeout(() => {
+      previewRefreshTimeout = null;
+      try {
+        void updatePreviewFor(selectedView.value, { skipBackground: !shirtBgLoaded.value }).catch((error) => {
+          console.warn('[ShirtPlacer] Failed to refresh preview', error);
+        });
+      } catch (error) {
+        console.warn('[ShirtPlacer] Failed to refresh preview', error);
+      }
+    }, 150);
   }
 
   /**
@@ -1740,6 +2644,13 @@
       return;
     }
 
+    applyCanvasResolution();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.value!.width, canvas.value!.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
+
     const coverageTracker = {
       minX: Number.POSITIVE_INFINITY,
       minY: Number.POSITIVE_INFINITY,
@@ -1762,7 +2673,6 @@
       coverageTracker.maxY = Math.max(coverageTracker.maxY, bounds.maxY);
     };
 
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     drawShirtBg(ctx);
 
     const gridRect = resolveGrid();
@@ -1829,8 +2739,14 @@
     for (const obj of ordered) {
       if (obj.type === 'image') {
         const item = obj as any;
-        // Skip until the img element exists
-        if (!item.img || !(item.img instanceof Image)) continue;
+        const imageEl = item?.img as any;
+        // Be permissive: avoid strict instanceof checks that can fail under proxies
+        const canDraw = imageEl && (
+          (typeof HTMLImageElement !== 'undefined' && imageEl instanceof HTMLImageElement) ||
+          (typeof imageEl.tagName === 'string' && imageEl.tagName.toLowerCase() === 'img') ||
+          (typeof imageEl.naturalWidth === 'number')
+        );
+        if (!canDraw) continue;
 
         ctx.globalAlpha = 1;
         ctx.save();
@@ -1839,7 +2755,7 @@
         ctx.translate(cx, cy);
         ctx.rotate(((item.rotation || 0) * Math.PI) / 180);
         // draw the image centered in its frame; frame size stays constant
-        ctx.drawImage(item.img, -item.w / 2, -item.h / 2, item.w, item.h);
+        ctx.drawImage(imageEl, -item.w / 2, -item.h / 2, item.w, item.h);
         ctx.restore();
 
         const imageBounds = getAABB({
@@ -2078,12 +2994,18 @@
       },
     };
 
-    updatePreviewFor(selectedView.value, { skipBackground: !shirtBgLoaded.value });
+    schedulePreviewRefresh();
   }
 
+  watch(canvas, () => {
+    applyCanvasResolution();
+    draw();
+  });
 
-
-  onMounted(draw);
+  onMounted(() => {
+    applyCanvasResolution();
+    draw();
+  });
 
   /**
    * Hit-tests all drawable objects in z-order to find the top-most match.
@@ -2659,6 +3581,8 @@
           elementVariant: identity.elementVariant ?? (vectorHint ? 'svg' : 'bitmap'),
           view: selectedView.value,
           name: buildImageDisplayName(identity.elementType, identity.elementVariant ?? (vectorHint ? 'svg' : 'bitmap'), payload?.name),
+          assetCacheRef: null,
+          originalSource: typeof payload.imgUrl === 'string' ? payload.imgUrl : null,
         } as ImageObject & Record<string, any>;
 
         if (payload?.shapeMeta) {
@@ -2666,6 +3590,18 @@
         }
 
         images.push(newImage);
+
+        if (typeof payload.imgUrl === 'string' && payload.imgUrl.startsWith('data:')) {
+          storeDataUrlInCache(payload.imgUrl, 'design-image')
+            .then((ref) => {
+              if (ref) {
+                newImage.assetCacheRef = ref;
+              }
+            })
+            .catch((error) => {
+              console.warn('[ShirtPlacer] Failed to cache design image', error);
+            });
+        }
 
         draw();
       };
@@ -2717,85 +3653,64 @@
    * Applies a new garment definition and refreshes dependent state (grid, previews, bg).
    */
   function updateClothing(details: any) {
-    if (!details) return;
-
-    const colorsArray = Array.isArray(details.colors) ? details.colors : [];
-    const primaryColor = colorsArray[0] ?? {};
-    const bg = typeof primaryColor?.background === 'string' ? primaryColor.background : undefined;
-    const backgroundChange = Boolean(details.front || details.back || bg);
-    const incomingGrid = details.grid as DesignGrid | undefined;
-
-    if (incomingGrid) {
-      const mergedGrid = {
-        ...DEFAULT_GRID,
-        ...incomingGrid,
-      } as DesignGrid;
-      clothingDetails.value.grid = { ...mergedGrid };
-      viewGridState.Front = { ...mergedGrid };
-      viewGridState.Back = { ...mergedGrid };
-      viewGridInitialized.Front = true;
-      viewGridInitialized.Back = true;
-    } else {
-      const currentGrid = resolveGrid();
-      viewGridState.Front = { ...currentGrid };
-      viewGridState.Back = { ...currentGrid };
-    }
-
-    if (!incomingGrid) {
-      requestAutoGrid(!backgroundChange);
-    }
-
-    if (Object.prototype.hasOwnProperty.call(details, 'sizeMeasurements')) {
-      clothingDetails.value.sizeMeasurements = hydrateSizeMeasurements(details.sizeMeasurements);
-    }
-
-    if (Object.prototype.hasOwnProperty.call(details, 'size')) {
-      clothingDetails.value.size = typeof details.size === 'string' ? details.size : '';
-    }
-
-    const assignableKeys: Array<keyof typeof clothingDetails.value> = ['name', 'image', 'style', 'gender'];
-    for (const key of assignableKeys) {
-      if (Object.prototype.hasOwnProperty.call(details, key) && details[key] !== undefined) {
-        (clothingDetails.value as any)[key] = details[key];
+    try {
+      // 1) update garment image sources
+      if (details?.front || details?.back || details?.colors) {
+        viewToSrc.Front =
+          details.front ||
+          details.colors?.[0]?.background ||
+          viewToSrc.Front ||
+          '';
+        viewToSrc.Back =
+          details.back ||
+          details.front ||
+          details.colors?.[0]?.background ||
+          viewToSrc.Back ||
+          '';
       }
-    }
 
-    if (backgroundChange) {
-      if (details.front) viewToSrc.Front = details.front;
-      if (details.back) {
-        viewToSrc.Back = details.back;
-      } else if (details.front) {
-        viewToSrc.Back = details.front;
+      // 2) safely merge grid (no external hydrator)
+      const nextGridRaw = details?.grid && typeof details.grid === 'object' ? details.grid : null;
+      if (nextGridRaw) {
+        const cur = resolveGrid();
+        const g = nextGridRaw as Partial<DesignGrid> & Record<string, any>;
+        clothingDetails.value.grid = {
+          ...cur,
+          x: Number.isFinite(Number(g.x)) ? Number(g.x) : cur.x,
+          y: Number.isFinite(Number(g.y)) ? Number(g.y) : cur.y,
+          w: Number.isFinite(Number(g.w)) ? Number(g.w) : cur.w,
+          h: Number.isFinite(Number(g.h)) ? Number(g.h) : cur.h,
+          widthInches:
+            (Number.isFinite(Number(g.widthInches)) ? Number(g.widthInches) : null) ??
+            (Number.isFinite(Number((g as any).width_in)) ? Number((g as any).width_in) : null) ??
+            (cur.widthInches ?? null),
+          heightInches:
+            (Number.isFinite(Number(g.heightInches)) ? Number(g.heightInches) : null) ??
+            (Number.isFinite(Number((g as any).height_in)) ? Number((g as any).height_in) : null) ??
+            (cur.heightInches ?? null),
+          dpi:
+            (Number.isFinite(Number(g.dpi)) ? Number(g.dpi) : null) ??
+            (Number.isFinite(Number((g as any).pxPerInch)) ? Number((g as any).pxPerInch) : null) ??
+            (Number.isFinite(Number((g as any).pixelsPerInch)) ? Number((g as any).pixelsPerInch) : null) ??
+            (cur.dpi ?? null),
+          auto: (g as any).auto ?? cur.auto ?? null,
+          autoGenerated: (g as any).autoGenerated ?? cur.autoGenerated ?? null,
+        } as any;
       }
-      if (!details.front && !details.back && bg) {
-        viewToSrc.Front = bg;
-        viewToSrc.Back = bg;
-      }
+
+      // 3) push to store (pricing/coverage depend on this)
+      syncGridToCheckoutStore(clothingDetails.value.grid as DesignGrid);
+
+      // 4) refresh background + kick auto-grid + redraw
+      setShirtBackground(
+        viewToSrc[selectedView.value] || viewToSrc.Front || '',
+        { mirror: viewMirrored[selectedView.value] }
+      );
+      requestAutoGrid(true);
+      draw();
+    } catch (e) {
+      console.warn('[ShirtPlacer] updateClothing failed', e);
     }
-
-    if (!backgroundChange && bg) {
-      viewToSrc.Front = viewToSrc.Front || bg;
-      viewToSrc.Back = viewToSrc.Back || bg;
-    }
-
-    if (!viewToSrc.Back) {
-      viewToSrc.Back = viewToSrc.Front || '';
-    }
-
-    viewMirrored.Front = false;
-    viewMirrored.Back = false;
-
-    refreshAllPreviews();
-
-    if (details.bgTransform) {
-      setBackgroundTransform(details.bgTransform);
-    }
-
-    requestMeasurementRefresh();
-
-    resetDesignState('Front');
-    setShirtBackground(viewToSrc.Front || viewToSrc.Back || '', { mirror: viewMirrored.Front });
-    draw();
   }
 
   /**
@@ -2844,15 +3759,44 @@
 
   onMounted(() => {
     storeViewState(selectedView.value);
-    updatePreviewFor(selectedView.value, { skipBackground: !shirtBgLoaded.value });
+    void updatePreviewFor(selectedView.value, { skipBackground: !shirtBgLoaded.value }).catch((error) => {
+      console.warn('[ShirtPlacer] Failed to refresh preview', error);
+    });
     loadViewState(selectedView.value);
     setShirtBackground(viewToSrc[selectedView.value] || viewToSrc.Front || '', { mirror: viewMirrored[selectedView.value] });
     refreshAllPreviews();
     window.addEventListener('shirtlab-selectClothing', clothingSelectionHandler);
+    window.__shirtlabGenerateHighResPreviews = generateHighResCheckoutPreviews;
   });
 
   onUnmounted(() => {
     window.removeEventListener('shirtlab-selectClothing', clothingSelectionHandler);
+    if (previewRefreshTimeout !== null) {
+      clearTimeout(previewRefreshTimeout);
+      previewRefreshTimeout = null;
+    }
+    if (frontDisplayObjectUrl.value && frontDisplayObjectUrl.value.startsWith('blob:')) {
+      URL.revokeObjectURL(frontDisplayObjectUrl.value);
+    }
+    if (backDisplayObjectUrl.value && backDisplayObjectUrl.value.startsWith('blob:')) {
+      URL.revokeObjectURL(backDisplayObjectUrl.value);
+    }
+    if (frontDesignHiRes.value && frontDesignHiRes.value.startsWith('blob:')) {
+      URL.revokeObjectURL(frontDesignHiRes.value);
+    }
+    if (backDesignHiRes.value && backDesignHiRes.value.startsWith('blob:')) {
+      URL.revokeObjectURL(backDesignHiRes.value);
+    }
+    if (frontDesignCacheRef.value && isCachedAssetRef(frontDesignCacheRef.value)) {
+      revokeCachedObjectUrl(frontDesignCacheRef.value);
+    }
+    // Keep blank previews cached between flows; do not delete on unmount.
+    if (backDesignCacheRef.value && isCachedAssetRef(backDesignCacheRef.value)) {
+      revokeCachedObjectUrl(backDesignCacheRef.value);
+    }
+    if (window.__shirtlabGenerateHighResPreviews === generateHighResCheckoutPreviews) {
+      delete window.__shirtlabGenerateHighResPreviews;
+    }
   });
 
   watch(showGrid, () => {
@@ -2907,6 +3851,7 @@
     clearClothing,
     exportDesignState,
     applyDesignState,
+    generateHighResCheckoutPreviews,
   });
 
 

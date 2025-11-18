@@ -22,6 +22,8 @@ export interface SerializedImageObject {
   elementType?: ElementType;
   elementVariant?: ElementVariant;
   view?: DesignViewName;
+  assetCacheRef?: string | null;
+  originalSource?: string | null;
 }
 
 export interface SerializedTextObject {

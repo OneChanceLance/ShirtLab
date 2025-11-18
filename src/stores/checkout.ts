@@ -61,11 +61,23 @@ export const useCheckoutStore = defineStore('checkout', {
       Front: null,
       Back: null,
     } as Record<DesignView, string | null>,
+    designPreviewCacheRefs: {
+      Front: null,
+      Back: null,
+    } as Record<DesignView, string | null>,
     canvasPreviews: {
       Front: null,
       Back: null,
     } as Record<DesignView, string | null>,
+    canvasPreviewCacheRefs: {
+      Front: null,
+      Back: null,
+    } as Record<DesignView, string | null>,
     blankDesignPreviews: {
+      Front: null,
+      Back: null,
+    } as Record<DesignView, string | null>,
+    blankDesignCacheRefs: {
       Front: null,
       Back: null,
     } as Record<DesignView, string | null>,
@@ -181,26 +193,41 @@ export const useCheckoutStore = defineStore('checkout', {
     setDesignPreview(view: DesignView, preview: string | null) {
       this.designPreviews[view] = typeof preview === 'string' && preview.trim() ? preview : null;
     },
+    setDesignPreviewCacheRef(view: DesignView, ref: string | null) {
+      this.designPreviewCacheRefs[view] = typeof ref === 'string' && ref.trim() ? ref : null;
+    },
     resetDesignPreviews() {
       this.designPreviews.Front = null;
       this.designPreviews.Back = null;
       this.activeDesignView = 'Front';
       this.resetBlankDesignPreviews();
       this.resetCanvasPreviews();
+      this.designPreviewCacheRefs.Front = null;
+      this.designPreviewCacheRefs.Back = null;
     },
     setBlankDesignPreview(view: DesignView, preview: string | null) {
       this.blankDesignPreviews[view] = typeof preview === 'string' && preview.trim() ? preview : null;
     },
+    setBlankDesignCacheRef(view: DesignView, ref: string | null) {
+      this.blankDesignCacheRefs[view] = typeof ref === 'string' && ref.trim() ? ref : null;
+    },
     resetBlankDesignPreviews() {
       this.blankDesignPreviews.Front = null;
       this.blankDesignPreviews.Back = null;
+      this.blankDesignCacheRefs.Front = null;
+      this.blankDesignCacheRefs.Back = null;
     },
     setCanvasPreview(view: DesignView, preview: string | null) {
       this.canvasPreviews[view] = typeof preview === 'string' && preview.trim() ? preview : null;
     },
+    setCanvasPreviewCacheRef(view: DesignView, ref: string | null) {
+      this.canvasPreviewCacheRefs[view] = typeof ref === 'string' && ref.trim() ? ref : null;
+    },
     resetCanvasPreviews() {
       this.canvasPreviews.Front = null;
       this.canvasPreviews.Back = null;
+      this.canvasPreviewCacheRefs.Front = null;
+      this.canvasPreviewCacheRefs.Back = null;
     },
     setActiveDesignView(view: DesignView) {
       this.activeDesignView = view;
@@ -238,6 +265,9 @@ export const useCheckoutStore = defineStore('checkout', {
       if (backBlank) {
         this.setBlankDesignPreview('Back', backBlank);
       }
+      const blankCacheRefs = (item as any)?.blankDesignCacheRefs ?? { Front: null, Back: null };
+      this.setBlankDesignCacheRef('Front', normalizePreview(blankCacheRefs?.Front));
+      this.setBlankDesignCacheRef('Back', normalizePreview(blankCacheRefs?.Back));
       const canvasPreviews = (item as any)?.canvasPreviews ?? { Front: null, Back: null };
       const frontCanvas = normalizePreview(canvasPreviews?.Front);
       const backCanvas = normalizePreview(canvasPreviews?.Back);
@@ -247,6 +277,12 @@ export const useCheckoutStore = defineStore('checkout', {
       if (backCanvas) {
         this.setCanvasPreview('Back', backCanvas);
       }
+      const canvasCacheRefs = (item as any)?.canvasPreviewCacheRefs ?? { Front: null, Back: null };
+      this.setCanvasPreviewCacheRef('Front', normalizePreview(canvasCacheRefs?.Front));
+      this.setCanvasPreviewCacheRef('Back', normalizePreview(canvasCacheRefs?.Back));
+      const designCacheRefs = (item as any)?.designPreviewCacheRefs ?? { Front: null, Back: null };
+      this.setDesignPreviewCacheRef('Front', normalizePreview(designCacheRefs?.Front));
+      this.setDesignPreviewCacheRef('Back', normalizePreview(designCacheRefs?.Back));
       this.ensureMinimumQuantity();
       const baselineDesign = item.designState ? cloneValue(item.designState) : null;
       const baselineDefinition = item.clothingDefinition ? cloneValue(item.clothingDefinition) : null;
