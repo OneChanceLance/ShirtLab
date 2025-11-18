@@ -285,10 +285,6 @@
               </div>
 
             </div>
-            <button v-if="currentStep === 1" type="button" class="checkout-form__secondary"
-              @click="openExportPreviewOverlay">
-              Preview export images
-            </button>
             <button v-if="currentStep === 1" type="button" class="checkout-form__submit" @click="proceedToContact">
               Proceed
             </button>
@@ -302,40 +298,6 @@
             </button>
           </div>
         </footer>
-      </div>
-    </div>
-  </transition>
-  <transition name="export-preview-fade">
-    <div v-if="exportPreviewOverlay.open" class="export-preview-overlay" role="dialog" aria-modal="true"
-      @click.self="closeExportPreviewOverlay">
-      <div class="export-preview-overlay__panel">
-        <header class="export-preview-overlay__header">
-          <div>
-            <h2>Design export preview</h2>
-            <p>These are the images queued for Supabase storage.</p>
-          </div>
-          <button type="button" class="export-preview-overlay__close" @click="closeExportPreviewOverlay">
-            Close
-          </button>
-        </header>
-        <div class="export-preview-overlay__content">
-          <div v-for="item in exportPreviewOverlay.items" :key="item.cartItemId" class="export-preview-item">
-            <div class="export-preview-item__header">
-              <h3>{{ item.itemLabel }}</h3>
-              <span>{{ item.variantLabel }} · Qty {{ item.quantity }}</span>
-            </div>
-            <div class="export-preview-item__grid">
-              <figure v-for="preview in item.previews" :key="`${item.cartItemId}-${preview.key}`"
-                class="export-preview-card">
-                <div class="export-preview-card__image">
-                  <img v-if="preview.url" :src="preview.url" :alt="`${preview.label} for ${item.itemLabel}`" />
-                  <span v-else class="export-preview-card__placeholder">Not available</span>
-                </div>
-                <figcaption>{{ preview.label }}</figcaption>
-              </figure>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   </transition>
@@ -462,37 +424,6 @@
 
   // Debug switch for preview selection pipeline
   const DEBUG_PREVIEW_PIPELINE = false;
-
-  type ExportPreviewVariantKey =
-    | 'front-with-shirt'
-    | 'front-without-shirt'
-    | 'back-with-shirt'
-    | 'back-without-shirt';
-
-  const EXPORT_PREVIEW_LABELS: Record<ExportPreviewVariantKey, string> = {
-    'front-with-shirt': 'Front · With shirt',
-    'front-without-shirt': 'Front · Design only',
-    'back-with-shirt': 'Back · With shirt',
-    'back-without-shirt': 'Back · Design only',
-  };
-
-  type ExportPreviewItem = {
-    cartItemId: string;
-    itemLabel: string;
-    variantLabel: string;
-    quantity: number;
-    previews: Array<{
-      key: ExportPreviewVariantKey;
-      label: string;
-      url: string | null;
-    }>;
-  };
-
-  // Modal state containing the preview cards shown before uploads occur.
-  const exportPreviewOverlay = reactive({
-    open: false,
-    items: [] as ExportPreviewItem[],
-  });
 
   type ExportPreviewUploads = {
     frontWithShirt?: string | null;
@@ -658,27 +589,6 @@
     return uploadBuckets;
   }
 
-  // Choose the best preview to show the user: prefer the freshly-uploaded URL, otherwise fall back to the first
-  // viable candidate (data URL, cached blob, colour fallback).
-  function resolveDisplaySource(
-    candidates: string[] | null | undefined,
-    uploaded: string | null | undefined = null,
-    options?: { strict?: boolean },
-  ): string | null {
-    const strict = Boolean(options?.strict);
-    if (typeof uploaded === 'string' && uploaded.trim().length > 0) {
-      return uploaded.trim();
-    }
-    if (strict) return null;
-    if (!Array.isArray(candidates)) return null;
-    const normalized = candidates
-      .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-      .filter((candidate) => candidate.length > 0);
-    if (!normalized.length) return null;
-    const displayable = normalized.find((candidate) => !candidate.startsWith('cache://'));
-    return displayable ?? normalized[0];
-  }
-
   function viewHasDesign(state: SerializedDesignState | null, view: DesignViewName): boolean {
     if (!state || !state.views) return false;
     const targetView = state.views[view];
@@ -776,66 +686,6 @@
     };
   }
 
-  /**
-   * Convert the candidate/ upload info into the structure consumed by the overlay AND the Supabase payload.
-   * We always include all four slots (front/back × with/without shirt) even if some are null so downstream
-   * consumers can rely on consistent shapes.
-   */
-  function buildExportPreviewItem(
-    item: CartItem,
-    candidates: PreviewCandidateSet,
-    uploads?: {
-      frontWithShirt?: string | null;
-      frontWithoutShirt?: string | null;
-      backWithShirt?: string | null;
-      backWithoutShirt?: string | null;
-    } | null,
-  ): ExportPreviewItem | null {
-    const resolveOrWarn = (
-      label: string,
-      candidatesForView: string[],
-      uploadedUrl: string | null | undefined,
-    ): string | null => {
-      if (typeof uploadedUrl === 'string' && uploadedUrl.trim().length) return uploadedUrl.trim();
-      const fallback = resolveDisplaySource(candidatesForView, null);
-      if (fallback) {
-        console.warn(`[Checkout] ${label} preview missing uploaded URL; showing cached source instead.`, {
-          fallback: describePreviewSource(fallback),
-        });
-      }
-      return fallback;
-    };
-
-    const frontWithSource = previewSlotEnabled('front-with-shirt')
-      ? resolveOrWarn('Front with shirt', candidates.frontWithShirt, uploads?.frontWithShirt)
-      : resolveDisplaySource(candidates.frontWithShirt, null);
-    const frontWithoutSource = resolveOrWarn('Front design-only', candidates.frontWithoutShirt, uploads?.frontWithoutShirt);
-    const backWithSource = previewSlotEnabled('back-with-shirt')
-      ? resolveOrWarn('Back with shirt', candidates.backWithShirt, uploads?.backWithShirt)
-      : resolveDisplaySource(candidates.backWithShirt, null);
-    const backWithoutSource = resolveOrWarn('Back design-only', candidates.backWithoutShirt, uploads?.backWithoutShirt);
-
-    const previews = [
-      { key: 'front-with-shirt' as const, label: EXPORT_PREVIEW_LABELS['front-with-shirt'], url: frontWithSource },
-      { key: 'front-without-shirt' as const, label: EXPORT_PREVIEW_LABELS['front-without-shirt'], url: frontWithoutSource },
-      { key: 'back-with-shirt' as const, label: EXPORT_PREVIEW_LABELS['back-with-shirt'], url: backWithSource },
-      { key: 'back-without-shirt' as const, label: EXPORT_PREVIEW_LABELS['back-without-shirt'], url: backWithoutSource },
-    ];
-    if (!previews.some(p => p.url)) return null;
-
-    return {
-      cartItemId: item.id,
-      itemLabel: item.product?.name ?? 'Custom apparel',
-      variantLabel: cartItemVariantLabel(item),
-      quantity: item.quantity,
-      previews,
-    };
-  }
-
-  function closeExportPreviewOverlay() {
-    exportPreviewOverlay.open = false;
-  }
-
   // --- Cart summaries (feeds step 1 UI + order snapshot) ---------------------
   const cartItems = computed(() => cartStore.items);
   const hasCartItems = computed(() => cartItems.value.length > 0);
@@ -896,39 +746,6 @@
   const TAX_RATE = 0.06;
   const STRIPE_PERCENT = 0.029;
   const STRIPE_FIXED = 0.3;
-
-  // Build export-preview entries for every cart item (used both for overlay rendering and order uploads).
-  function buildExportPreviewItems(): ExportPreviewItem[] {
-    const items = cartItems.value;
-    const previewItems: ExportPreviewItem[] = [];
-    for (const item of items) {
-      const candidates = buildPreviewCandidates(item);
-      const previewItem = buildExportPreviewItem(item, candidates, null);
-      if (previewItem) {
-        previewItems.push(previewItem);
-      }
-    }
-    return previewItems;
-  }
-
-  // Refresh overlay state; `openOverlay` controls whether we toggle the modal or just refresh its data.
-  function applyExportPreviewItems(openOverlay: boolean): ExportPreviewItem[] {
-    const previewItems = buildExportPreviewItems();
-    if (DEBUG_PREVIEW_PIPELINE) {
-      console.log('[ExportPreview] items', previewItems);
-    }
-    exportPreviewOverlay.items.splice(0, exportPreviewOverlay.items.length, ...previewItems);
-    if (openOverlay) {
-      exportPreviewOverlay.open = previewItems.length > 0;
-    } else if (exportPreviewOverlay.open && previewItems.length === 0) {
-      exportPreviewOverlay.open = false;
-    }
-    return previewItems;
-  }
-
-  function openExportPreviewOverlay() {
-    applyExportPreviewItems(true);
-  }
 
   const cartPricingSummary = computed(() => {
     const details = cartPricingDetails.value;
@@ -1852,7 +1669,6 @@
     const assetUrlLookup = new Map<string, string>();
     const orderItemIdCache = new Map<string, string>();
     const usedOrderItemIds = new Set<string>();
-    const previewOverlayItems: ExportPreviewItem[] = [];
 
     const resolveOrderItemId = (item: CartItem): string => {
       const existing = orderItemIdCache.get(item.id);
@@ -1917,14 +1733,6 @@
         back_design_without_shirt_url: backWithoutUrlFinal,
 
       });
-
-      const previewItem = buildExportPreviewItem(item, planEntry.candidates, {
-        frontWithShirt: uploadUrls.frontWithShirt ?? null,
-        frontWithoutShirt: uploadUrls.frontWithoutShirt ?? null,
-        backWithShirt: uploadUrls.backWithShirt ?? null,
-        backWithoutShirt: uploadUrls.backWithoutShirt ?? null,
-      });
-      if (previewItem) previewOverlayItems.push(previewItem);
 
       // Upload underlying design assets — uploads only, never keep external URLs
       const uploadedSources = planEntry.designSources;
@@ -2027,9 +1835,6 @@
         }
       }
     }
-
-    exportPreviewOverlay.items.splice(0, exportPreviewOverlay.items.length, ...previewOverlayItems);
-    exportPreviewOverlay.open = previewOverlayItems.length > 0;
 
     const designEntries: DesignEntry[] = rawItemsSnapshot
       .map((item) => {
@@ -2511,25 +2316,6 @@
     markProcessingVariant('withoutBack', value);
   });
 
-  // Keep the overlay in sync with live edits. When any preview/canvas state changes while the modal is open,
-  // rebuild its data so the user always sees the latest renders before uploading.
-  watch(
-    [
-      cartItems,
-      () => checkoutStore.designPreviews,
-      () => checkoutStore.blankDesignPreviews,
-      () => checkoutStore.canvasPreviews,
-      () => checkoutStore.designPreviewCacheRefs,
-      () => checkoutStore.blankDesignCacheRefs,
-    ],
-    () => {
-      if (exportPreviewOverlay.open) {
-        applyExportPreviewItems(false);
-      }
-    },
-    { deep: true },
-  );
-
   onBeforeUnmount(() => {
     if (localPreviewObjectUrl) {
       try {
@@ -2800,7 +2586,6 @@
     if (orderRecorded.value) {
       cartStore.clear();
     }
-    exportPreviewOverlay.open = false;
     checkoutStore.setOpen(false);
   }
 
@@ -2821,7 +2606,6 @@
     if (!value) {
       checkoutStore.cancelEditingCartItem();
       resetPaymentFlow();
-      exportPreviewOverlay.open = false;
       return;
     }
     nextTick(() => {
@@ -4147,180 +3931,4 @@
     }
   }
 
-  .export-preview-fade-enter-active,
-  .export-preview-fade-leave-active {
-    transition: opacity 0.2s ease;
-  }
-
-  .export-preview-fade-enter-from,
-  .export-preview-fade-leave-to {
-    opacity: 0;
-  }
-
-  .export-preview-overlay {
-    position: fixed;
-    inset: 0;
-    backdrop-filter: blur(12px);
-    background: rgba(15, 23, 42, 0.45);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: clamp(1rem, 4vw, 2rem);
-    z-index: 120000;
-  }
-
-  .export-preview-overlay__panel {
-    width: min(1040px, 94vw);
-    max-height: min(90vh, 720px);
-    background: #fff;
-    border-radius: 1.5rem;
-    box-shadow: 0 32px 64px rgba(15, 23, 42, 0.35);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .export-preview-overlay__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1.25rem;
-    padding: 1.5rem 2rem 1.25rem;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
-  }
-
-  .export-preview-overlay__header h2 {
-    margin: 0;
-    font-size: 1.4rem;
-    font-weight: 600;
-    color: #0f172a;
-  }
-
-  .export-preview-overlay__header p {
-    margin: 0.35rem 0 0;
-    font-size: 0.92rem;
-    color: #475569;
-  }
-
-  .export-preview-overlay__close {
-    border: none;
-    background: #0f172a;
-    color: #fff;
-    border-radius: 999px;
-    padding: 0.5rem 1.2rem;
-    font-size: 0.78rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: transform 0.15s ease, box-shadow 0.2s ease;
-  }
-
-  .export-preview-overlay__close:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.18);
-  }
-
-  .export-preview-overlay__close:active {
-    transform: translateY(0);
-  }
-
-  .export-preview-overlay__content {
-    padding: 1.75rem 2rem;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 1.75rem;
-  }
-
-  .export-preview-item {
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    border-radius: 1.25rem;
-    padding: 1.25rem 1.5rem;
-    background: linear-gradient(135deg, rgba(241, 245, 249, 0.65), rgba(255, 255, 255, 0.85));
-  }
-
-  .export-preview-item__header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  .export-preview-item__header h3 {
-    margin: 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: #0f172a;
-  }
-
-  .export-preview-item__header span {
-    font-size: 0.85rem;
-    color: #475569;
-  }
-
-  .export-preview-item__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 1rem;
-  }
-
-  .export-preview-card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    align-items: center;
-    text-align: center;
-  }
-
-  .export-preview-card__image {
-    width: 100%;
-    aspect-ratio: 3 / 4;
-    border-radius: 0.9rem;
-    background: rgba(248, 250, 252, 0.8);
-    box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-  }
-
-  .export-preview-card__image img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-  }
-
-  .export-preview-card__placeholder {
-    font-size: 0.8rem;
-    color: #94a3b8;
-  }
-
-  .export-preview-card figcaption {
-    font-size: 0.82rem;
-    color: #0f172a;
-    font-weight: 500;
-  }
-
-  @media (max-width: 768px) {
-    .export-preview-overlay__panel {
-      width: 95vw;
-      max-height: 92vh;
-    }
-
-    .export-preview-overlay__header,
-    .export-preview-overlay__content {
-      padding: 1.25rem 1.25rem;
-    }
-  }
 </style>
-const registerPreviewAsset = (params: { cartItemId: string; url: string | null; bucket: string | null }) => {
-const { cartItemId, url, bucket } = params;
-if (!url || url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('cache://')) return;
-designAssets.push({
-cartItemId,
-url,
-bucket: bucket ?? null,
-stored: true,
-});
-};
