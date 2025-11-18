@@ -227,13 +227,14 @@
               <section v-if="currentStep === 3" class="checkout-form-card-striper">
                 <header class="checkout-card__header">
                   <div>
-                    <p v-if="requestStatus === 'success'">Payment complete! We’ll follow up by email.</p>
+                    <p v-if="requestStatus === 'success' && orderRecorded">Checkout complete! We’ll follow up by email.</p>
+                    <p v-else-if="requestStatus === 'success' && orderRecording">Payment complete; finalizing your order…</p>
                     <p v-else-if="requestStatus === 'processing'">Confirming your payment…</p>
                   </div>
                 </header>
-                <template v-if="requestStatus === 'success'">
+                <template v-if="requestStatus === 'success' && orderRecorded">
                   <div class="checkout-payment__success">
-                    <p>Thanks! Your payment was received. We’ll be in touch shortly with next steps.</p>
+                    <p>Thanks! Your payment was received and your order has been saved. We’ll be in touch shortly with next steps.</p>
                     <button type="button" class="checkout-form__submit" @click="close">
                       Close
                     </button>
@@ -364,7 +365,7 @@
    *
    * TL;DR: the variables exist to keep previews correct, uploads idempotent, and the UI snappy.
    */
-  import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
+  import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
   import { storeToRefs } from 'pinia';
   import { changeDpiBlob, changeDpiDataUrl } from 'changedpi';
   import { useCheckoutStore } from '../../stores/checkout';
@@ -372,7 +373,6 @@
   import type { CartItem } from '../../stores/cart';
   import { formatCurrency } from '../../utils/currency';
   import { calculatePricing } from '../../utils/pricing';
-  import { supabase } from '../../supabase';
   import { uploadBlobToFirebase } from '../../utils/firebaseUploads';
   import type { DesignViewName, SerializedDesignState } from '../../types/designState';
   import {
@@ -434,6 +434,8 @@
   const { isOpen } = storeToRefs(checkoutStore);
   const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, ''); // base Supabase URL
   const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim();   // anon key (browser)
+  const ORDER_FUNCTION_URL = (import.meta.env.VITE_ORDER_FUNCTION_URL as string | undefined)?.trim() || null;
+  const CHECKOUT_FUNCTION_URL = (import.meta.env.VITE_CHECKOUT_FUNCTION_URL as string | undefined)?.trim() || null;
   const STRIPE_PUBLISHABLE_KEY = (import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string | undefined)?.trim(); // Stripe client key
   const ORDER_PREVIEWS_BUCKET = (import.meta.env.VITE_SUPABASE_ORDER_PREVIEWS_BUCKET as string | undefined)?.trim() || 'order-previews'; // proof images
   const ORDER_DESIGNS_BUCKET = (import.meta.env.VITE_SUPABASE_ORDER_DESIGNS_BUCKET as string | undefined)?.trim() || 'order-design-assets'; // raw assets
@@ -2100,8 +2102,7 @@
 
     try {
       resetUploadProgress();
-      console.log('[Checkout] Supabase order payload (uploads only, no external links)', { designs: designEntries });
-      const { error } = await supabase.from('orders').insert([{
+      const orderPayload = {
         first_name: firstName,
         last_name: lastName,
         company,
@@ -2112,17 +2113,60 @@
         email,
         payment_status: true,
         order_total: orderTotal,
-        status: 'pending',
-      }]);
-      if (error) throw error;
+        status: 'pending' as const,
+      };
+      console.log('[Checkout] Order function payload (uploads only, no external links)', orderPayload);
+
+      if (!ORDER_FUNCTION_URL) {
+        throw new Error('Order function URL is not configured. Set VITE_ORDER_FUNCTION_URL.');
+      }
+
+      const response = await fetch(ORDER_FUNCTION_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(orderPayload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.error) {
+        throw new Error(data?.error ?? 'Failed to record order.');
+      }
 
       orderRecorded.value = true;
       clearCheckoutQueryParam();
     } catch (error) {
-      console.error('[Checkout] Failed to record order in Supabase', error);
+      console.error('[Checkout] Failed to record order', error);
     } finally {
       orderRecording.value = false;
       scheduleUploadProgressHide();
+    }
+  }
+
+  /**
+   * Public helper to generate high‑res previews (when available),
+   * upload all required blobs to Firebase Storage, and create the
+   * corresponding order row in Supabase.
+   *
+   * Exposed on `window.__shirtlabCreateOrderWithUploads` so hosts can
+   * trigger it manually (for example before unloading the tab).
+   */
+  async function createOrderWithUploads() {
+    try {
+      if (typeof window !== 'undefined') {
+        const generator = (window as any).__shirtlabGenerateHighResPreviews;
+        if (typeof generator === 'function') {
+          try {
+            await generator();
+          } catch (error) {
+            console.warn('[Checkout] Failed to generate high‑res previews before order creation', error);
+          }
+        }
+      }
+      await recordOrderIfNeeded();
+    } catch (error) {
+      console.error('[Checkout] createOrderWithUploads failed', error);
+      throw error;
     }
   }
 
@@ -2616,13 +2660,15 @@
       checkoutError.value = 'Add at least one priced item before checking out.';
       return;
     }
-    if (!SUPABASE_URL) {
-      checkoutError.value = 'Checkout service is not configured. Missing VITE_SUPABASE_URL.';
-      return;
-    }
-    if (!SUPABASE_ANON_KEY) {
-      checkoutError.value = 'Checkout service is not configured. Missing VITE_SUPABASE_ANON_KEY.';
-      return;
+    if (!CHECKOUT_FUNCTION_URL) {
+      if (!SUPABASE_URL) {
+        checkoutError.value = 'Checkout service is not configured. Missing VITE_SUPABASE_URL.';
+        return;
+      }
+      if (!SUPABASE_ANON_KEY) {
+        checkoutError.value = 'Checkout service is not configured. Missing VITE_SUPABASE_ANON_KEY.';
+        return;
+      }
     }
     if (!stripeConfigured.value) {
       checkoutError.value = 'Payment service is not configured. Missing Stripe publishable key.';
@@ -2673,36 +2719,43 @@
       const cancelUrl = new URL(window.location.href);
       cancelUrl.searchParams.set('checkout', 'canceled');
 
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/create-checkout-session`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      const requestBody = {
+        mode: 'payment-intent',
+        lineItems,
+        customer: {
+          name: checkoutStore.customer.fullName || null,
+          email: checkoutStore.customer.email || null,
+          phone: checkoutStore.customer.phone || null,
+          company: checkoutStore.customer.company || null,
+          notes: checkoutStore.customer.notes || null,
         },
-        body: JSON.stringify({
-          mode: 'payment-intent',
-          lineItems,
-          customer: {
-            name: checkoutStore.customer.fullName || null,
-            email: checkoutStore.customer.email || null,
-            phone: checkoutStore.customer.phone || null,
-            company: checkoutStore.customer.company || null,
-            notes: checkoutStore.customer.notes || null,
+        cartSummary: {
+          subtotal: cartStore.subtotal,
+          currency: cartStore.firstCurrency ?? 'USD',
+          itemCount: cartStore.itemCount,
+          uniqueCount: cartStore.uniqueCount,
+        },
+        metadata: {
+          activeItemId: activeCartItem.value?.id ?? null,
+        },
+        successUrl: successUrl.toString(),
+        cancelUrl: cancelUrl.toString(),
+        bypass: BYPASS_PAYMENTS,
+      };
+
+      const response = await fetch(
+        CHECKOUT_FUNCTION_URL || `${SUPABASE_URL}/functions/v1/create-checkout-session`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(CHECKOUT_FUNCTION_URL
+              ? {}
+              : { Authorization: `Bearer ${SUPABASE_ANON_KEY}` }),
           },
-          cartSummary: {
-            subtotal: cartStore.subtotal,
-            currency: cartStore.firstCurrency ?? 'USD',
-            itemCount: cartStore.itemCount,
-            uniqueCount: cartStore.uniqueCount,
-          },
-          metadata: {
-            activeItemId: activeCartItem.value?.id ?? null,
-          },
-          successUrl: successUrl.toString(),
-          cancelUrl: cancelUrl.toString(),
-          bypass: BYPASS_PAYMENTS,
-        }),
-      });
+          body: JSON.stringify(requestBody),
+        },
+      );
 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -2766,14 +2819,23 @@
   function close() {
     resetPaymentFlow();
     checkoutStore.cancelEditingCartItem();
-    if (requestStatus.value === 'success') {
+    if (orderRecorded.value) {
       cartStore.clear();
     }
     exportPreviewOverlay.open = false;
     checkoutStore.setOpen(false);
   }
 
+  onMounted(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__shirtlabCreateOrderWithUploads = createOrderWithUploads;
+    }
+  });
+
   onBeforeUnmount(() => {
+    if (typeof window !== 'undefined' && (window as any).__shirtlabCreateOrderWithUploads === createOrderWithUploads) {
+      delete (window as any).__shirtlabCreateOrderWithUploads;
+    }
     unmountPaymentElement();
   });
 
@@ -2792,9 +2854,7 @@
   });
 
   watch(() => requestStatus.value, (status) => {
-    if (status === 'success') {
-      recordOrderIfNeeded();
-    } else if (status === 'idle') {
+    if (status === 'idle') {
       orderRecorded.value = false;
     }
   });
