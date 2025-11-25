@@ -31,6 +31,9 @@ export interface SerializedTextObject {
   type: 'text';
   content: string;
   font: string;
+  fontStyle?: string;
+  fontWeight?: number | string;
+  underline?: boolean;
   color: string;
   outlineColor: string;
   outlineWidth: number;

@@ -1600,6 +1600,9 @@
     return {
       ...(source as TextObject),
       showHandles: (source as TextObject).showHandles ?? true,
+      fontStyle: (source as TextObject).fontStyle ?? 'normal',
+      fontWeight: (source as TextObject).fontWeight ?? 'normal',
+      underline: (source as TextObject).underline ?? false,
       isSelected: false,
       effect: {
         name: source.effect?.name ?? 'none',
@@ -2137,7 +2140,7 @@
           const effName = eff.name;
           const effOpts = withDefaults(eff.name, eff.options);
 
-          ctx.font = `${block.pxSize}px ${t.font}`;
+          ctx.font = getTextFontString(block.pxSize, t);
           ctx.fillStyle = t.color;
           ctx.strokeStyle = t.outlineColor;
           ctx.lineWidth = t.outlineWidth;
@@ -2152,11 +2155,14 @@
             if (!chars.length) { y += block.lineHeight; continue; }
 
             const advances = chars.map(ch => ctx.measureText(ch).width);
+            const totalWidth = advances.reduce((a, b) => a + b, 0);
             let cursorX = (() => {
-              if (t.alignment === 'center') return anchor - (advances.reduce((a, b) => a + b, 0)) / 2;
-              if (t.alignment === 'right') return anchor - (advances.reduce((a, b) => a + b, 0));
+              if (t.alignment === 'center') return anchor - totalWidth / 2;
+              if (t.alignment === 'right') return anchor - totalWidth;
               return anchor;
             })();
+
+            const underlineStartX = cursorX;
 
             for (let i = 0; i < chars.length; i++) {
               const ch = chars[i];
@@ -2169,6 +2175,19 @@
               }
               ctx.restore();
               cursorX += advances[i];
+            }
+
+            if ((t as any).underline) {
+              const underlineEndX = underlineStartX + totalWidth;
+              const underlineY = y + (block.descent ?? block.pxSize * 0.15);
+              ctx.save();
+              ctx.beginPath();
+              ctx.moveTo(underlineStartX, underlineY);
+              ctx.lineTo(underlineEndX, underlineY);
+              ctx.lineWidth = Math.max(1, (t.outlineWidth || 0.75));
+              ctx.strokeStyle = t.color;
+              ctx.stroke();
+              ctx.restore();
             }
 
             y += block.lineHeight;
@@ -2425,13 +2444,21 @@
   // Glyph-tight layout that accounts for overshoots (H, J, swashes, etc.)
   // Glyph-tight layout + word wrap + alignment
   // Word-only wrap (no letter-by-letter splits, no hyphens)
+
+  function getTextFontString(pxSize: number, t: TextObject): string {
+    const style = (t as any).fontStyle || 'normal';
+    const weight = (t as any).fontWeight || 'normal';
+    const family = t.font || 'Arial';
+    return `${String(style)} ${String(weight)} ${pxSize}px ${family}`;
+  }
+
   /**
    * Performs glyph-aware word wrapping and metrics gathering for a text object.
    */
   function layoutTextBlock(ctx: CanvasRenderingContext2D, t: TextObject) {
     const basePx = Math.max(1, getPixelsPerInch());
     const pxSize = t.size * basePx;
-    ctx.font = `${pxSize}px ${t.font}`;
+    ctx.font = getTextFontString(pxSize, t);
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = t.alignment;
 
@@ -2820,7 +2847,7 @@
         const effOpts = withDefaults(eff.name, eff.options); // ensure all knobs present
 
 
-        ctx.font = `${block.pxSize}px ${t.font}`;
+        ctx.font = getTextFontString(block.pxSize, t);
         ctx.fillStyle = t.color;
         ctx.strokeStyle = t.outlineColor;
         ctx.lineWidth = t.outlineWidth;
@@ -2854,6 +2881,7 @@
           else if (t.alignment === 'right') leftX = anchor - effWidth;
 
           // per-glyph draw at fixed baseline y, starting from leftX
+          const underlineStartX = leftX;
           let cursorX = leftX;
           for (let i = 0; i < chars.length; i++) {
             // inside the glyph loop
@@ -2877,6 +2905,19 @@
             ctx.restore();
 
             cursorX += advances[i] /* + extras[i] if you had any */;
+          }
+
+          if ((t as any).underline) {
+            const underlineEndX = underlineStartX + effWidth;
+            const underlineY = y + (block.descent ?? block.pxSize * 0.15);
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(underlineStartX, underlineY);
+            ctx.lineTo(underlineEndX, underlineY);
+            ctx.lineWidth = Math.max(1, (t.outlineWidth || 0.75));
+            ctx.strokeStyle = t.color;
+            ctx.stroke();
+            ctx.restore();
           }
 
           y += block.lineHeight;
@@ -3579,7 +3620,7 @@
     }
 
     if (type === 'text') {
-      texts.forEach(t => t.isSelected = false);
+      deselectAll();
 
       const identity = resolveElementIdentity('text', payload);
       const fontValue = Array.isArray(payload?.font)
@@ -3589,11 +3630,14 @@
         ? payload
         : payload.value || payload.content || 'Sample Text';
 
-      texts.push({
+      const newText: TextObject = {
         id: crypto.randomUUID?.() || Date.now().toString(),
         type: 'text',
         content: textContent,
         font: fontValue,
+        fontStyle: 'normal',
+        fontWeight: 'normal',
+        underline: false,
         color: payload.color || '#000000',
         outlineColor: payload.outlineColor || 'None',
         outlineWidth: payload.outlineWidth || 2,
@@ -3615,7 +3659,10 @@
         elementType: identity.elementType,
         elementVariant: identity.elementVariant ?? fontValue,
         view: selectedView.value,
-      });
+      };
+
+      texts.push(newText);
+      selectedObject.value = newText;
 
       draw();
     }

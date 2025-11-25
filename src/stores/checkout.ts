@@ -97,6 +97,7 @@ export const useCheckoutStore = defineStore('checkout', {
     editingBaselineClothingDefinition: null as Record<string, any> | null,
     editingSessionVersion: 0,
     editingCancelVersion: 0,
+    checkoutPressed: false,
   }),
   getters: {
     hasVariant(state): boolean {
@@ -118,6 +119,9 @@ export const useCheckoutStore = defineStore('checkout', {
     },
     isEditingCartItem(state): boolean {
       return Boolean(state.editingCartItemId);
+    },
+    hasPressedCheckout(state): boolean {
+      return state.checkoutPressed;
     },
   },
   actions: {
@@ -189,6 +193,7 @@ export const useCheckoutStore = defineStore('checkout', {
       this.editingCartItemId = null;
       this.designState = null;
       this.clothingDefinition = null;
+      this.checkoutPressed = false;
     },
     setDesignPreview(view: DesignView, preview: string | null) {
       this.designPreviews[view] = typeof preview === 'string' && preview.trim() ? preview : null;
@@ -324,6 +329,9 @@ export const useCheckoutStore = defineStore('checkout', {
       this.editingBaselineDesignState = null;
       this.editingCartItemId = null;
       this.editingCancelVersion += 1;
+    },
+    markCheckoutPressed() {
+      this.checkoutPressed = true;
     },
   },
 });

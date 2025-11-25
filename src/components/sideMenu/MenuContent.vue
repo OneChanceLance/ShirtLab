@@ -69,7 +69,7 @@
             <div class="product-size__header">
               <span class="product-size__label">Size</span>
               <span v-if="selectedProductSize" class="product-size__selection">Selected: {{ selectedProductSize
-                }}</span>
+              }}</span>
             </div>
             <div v-if="sizeAvailabilityNotice" class="product-size__notice" role="status" aria-live="polite">
               {{ sizeAvailabilityNotice }}
@@ -87,6 +87,29 @@
             <div v-else class="product-size__empty">
               Size information not available for this color.
             </div>
+          </div>
+        </div>
+
+        <div v-else-if="activeMenu === 'Guide'" class="guide-panel">
+          <div class="guide-panel__hero">
+            <p class="guide-panel__eyebrow">Need a quick start?</p>
+            <h3>How to use ShirtLab</h3>
+            <p>Follow the steps below to pick a shirt, add artwork, and submit your custom order.</p>
+          </div>
+          <div class="guide-panel__steps">
+            <article v-for="(step, index) in guideSteps" :key="step.title" class="guide-step">
+              <span class="guide-step__number">{{ index + 1 }}</span>
+              <div>
+                <h4>{{ step.title }}</h4>
+                <p>{{ step.description }}</p>
+              </div>
+            </article>
+          </div>
+          <div class="guide-panel__tips">
+            <h4>Pro tips</h4>
+            <ul>
+              <li v-for="tip in guideTips" :key="tip">{{ tip }}</li>
+            </ul>
           </div>
         </div>
 
@@ -330,6 +353,27 @@
     normalizeSizeToken,
   } from './types/colorList';
   import WeightSlider from './TextAssets/WeightSlider.vue';
+
+  const guideSteps = [
+    {
+      title: 'Select your garment',
+      description: 'Open the Product Colors panel to load available shirts, pick a color, update size, and lock in the base before you design.',
+    },
+    {
+      title: 'Build your artwork',
+      description: 'Upload high-resolution files or add text, icons, and shapes; use the alignment shortcuts to keep everything centered and layered correctly.',
+    },
+    {
+      title: 'Preview & checkout',
+      description: 'Review the preview in the summary card, set quantity, add to cart, and complete checkout when everything looks perfect.',
+    },
+  ];
+
+  const guideTips = [
+    'Upload artwork that is 300ppi or higher and uses transparent backgrounds when possible for crisp prints.',
+    'Use the center, duplicate, bring forward, and send back controls to keep multi-layered designs tidy.',
+    'Re-open the Product Colors panel anytime to confirm size availability or swap colors mid-design.',
+  ];
 
   /* =========================================================
      PROPS & EMITS
@@ -1954,7 +1998,7 @@
     align-items: center;
     display: flex;
     justify-content: space-between;
-    background-color: rgb(107, 112, 120);
+    background: rgb(75, 85, 93);
     height: 1rem;
     font-size: 1rem;
     line-height: 1rem;
@@ -2281,6 +2325,102 @@
   .product-size__empty {
     font-size: 0.82rem;
     color: #64748b;
+  }
+
+  .guide-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 1rem;
+
+
+    color: #e2e8f0;
+  }
+
+  .guide-panel__hero h3 {
+    margin: 0.2rem 0;
+    font-size: 1.4rem;
+    letter-spacing: 0.02em;
+  }
+
+  .guide-panel__hero p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: rgba(226, 232, 240, 0.75);
+  }
+
+  .guide-panel__eyebrow {
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #94c940;
+  }
+
+  .guide-panel__steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .guide-step {
+    display: flex;
+    gap: 0.7rem;
+    padding: 0.65rem;
+    border-radius: 0.75rem;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+  }
+
+  .guide-step h4 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .guide-step p {
+    margin: 0.25rem 0 0;
+    font-size: 0.85rem;
+    color: rgba(248, 250, 252, 0.8);
+  }
+
+  .guide-step__number {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: #94c940;
+    background: rgba(15, 23, 42, 0.8);
+  }
+
+  .guide-panel__tips {
+    background: rgba(15, 23, 42, 0.35);
+    border-radius: 0.7rem;
+    padding: 0.8rem;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+  }
+
+  .guide-panel__tips h4 {
+    margin: 0 0 0.4rem;
+    font-size: 1rem;
+    color: #fff;
+  }
+
+  .guide-panel__tips ul {
+    margin: 0;
+    padding-left: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .guide-panel__tips li {
+    font-size: 0.85rem;
+    color: rgba(248, 250, 252, 0.8);
   }
 
   #create-color {
