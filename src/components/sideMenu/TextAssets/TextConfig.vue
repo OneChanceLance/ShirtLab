@@ -65,6 +65,4 @@
         height: 1.5rem;
         fill: currentColor;
     }
-
-    ::ho
 </style>
