@@ -17,19 +17,28 @@
                     <img id="center" class="icon" src="./center.png"><span>Center</span>
                 </button>
             </div>
+
             <hr>
+
             <TextConfig label="Font" @click="togglePage('font')">
-                <span :style="{
-                    fontFamily: currentFontOption.value,
-                    cursor: 'pointer',
-                    fontSize: currentFontOption.showcase?.size || 'x-large',
-                    fontWeight: currentFontOption.showcase?.weight || 'normal',
-                    fontStyle: currentFontOption.showcase?.style || 'normal',
-                    textTransform: currentFontOption.showcase?.uppercase ? 'uppercase' : 'none',
-                }">
+                <span :style="currentFontPreviewStyle">
                     {{ currentFontOption.name }}
                 </span>
             </TextConfig>
+            <div id="textStyles" :class="{ disabled: !currentFontHasBoldVariant }">
+                <button type="button" class="textStyleControl" :class="{ active: isBoldActive }"
+                    :disabled="!currentFontHasBoldVariant" @click.stop="toggleBold">
+                    B
+                </button>
+                <button type="button" class="textStyleControl" :class="{ active: isItalicActive }"
+                    :disabled="!currentFontHasBoldVariant" @click.stop="toggleItalic">
+                    I
+                </button>
+                <button type="button" class="textStyleControl" :class="{ active: isUnderlineActive }"
+                    :disabled="!currentFontHasBoldVariant" @click.stop="toggleUnderline">
+                    U
+                </button>
+            </div>
             <hr>
             <TextConfig label="Color" @click="togglePage('color')">
                 <span :style="{ display: 'flex', alignItems: 'center', gap: '1rem' }">{{ textColor }}
@@ -59,10 +68,7 @@
                 <TabOption :options="alignmentOptions" v-model="alignmentModel" valueKey="label" />
             </TextConfig>
             <hr>
-            <TextConfig label="Rotation">
-                <!-- hook up when you’re ready: v-model + setText({ rotation }) -->
-            </TextConfig>
-            <hr />
+
         </div>
 
         <div v-else-if="currentMenu == 'font'" class="font-list">
@@ -73,7 +79,7 @@
             </div>
 
             <!-- Search Results -->
-            <div v-if="searchQuery.trim()" style=" max-height: 30rem; overflow-y: scroll;">
+            <div v-if="searchQuery.trim()" class="font-search-results">
                 <button id="allFontButton" @click="searchQuery = ''" style="display: flex; line-height: 1rem;"><svg
                         xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="3"
                         stroke="currentColor" class="size-6">
@@ -280,7 +286,7 @@
     import { COLOR_OPTIONS } from './types/colorList';
     import WeightSlider from './TextAssets/WeightSlider.vue';
     import { EFFECTS, withDefaults } from './types/effectsList';
-    import type { EffectName, EffectOptions, TextObject, ImageObject } from '../shirtlab/types';
+    import type { EffectName, EffectOptions, TextObject, ImageObject, FontOption } from '../shirtlab/types';
 
     const searchQuery = ref('');
     const props = defineProps<{
@@ -314,6 +320,9 @@
     const outlineWidth = propProxy('outlineWidth', 0);
     const textSizeIn = propProxy('size', 10);
     const alignmentModel = propProxy('alignment', 'left');
+    const fontWeightModel = propProxy('fontWeight', 'normal' as any);
+    const fontStyleModel = propProxy('fontStyle', 'normal' as any);
+    const underlineModel = propProxy('underline', false as any);
 
     const newTextEl = ref<HTMLInputElement | null>(null);
     const lowContrast = ref(false);
@@ -345,17 +354,69 @@
     }
 
     // derived for the “Font” row preview
-    const currentFontOption = computed(() => {
+    const currentFontOption = computed<FontOption>(() => {
         const font = selectedText.value?.font;
         const all = Object.values(FONT_OPTIONS);
         if (!font) return all[0];
         return all.find(f => f.value === font) ?? all[0];
     });
 
+    const currentFontPreviewStyle = computed(() => {
+        const base = currentFontOption.value;
+        const size = base.showcase?.size || 'x-large';
+        const weight = selectedText.value?.fontWeight ?? base.showcase?.weight ?? 'normal';
+        const style = selectedText.value?.fontStyle ?? base.showcase?.style ?? 'normal';
+        const underline = selectedText.value?.underline ?? false;
+        return {
+            fontFamily: base.value,
+            cursor: 'pointer',
+            fontSize: size,
+            fontWeight: weight,
+            fontStyle: style,
+            textTransform: base.showcase?.uppercase ? 'uppercase' : 'none',
+            textDecoration: underline ? 'underline' : 'none',
+        } as Record<string, string | number>;
+    });
+
+    const currentFontHasBoldVariant = computed(() => {
+        if (typeof document === 'undefined') return true;
+        const family = currentFontOption.value.value;
+        const fonts = (document as any).fonts;
+        if (!fonts || typeof fonts.check !== 'function') return true;
+        try {
+            return fonts.check(`700 16px ${family}`);
+        } catch {
+            return true;
+        }
+    });
+
+    const isBoldActive = computed(() => {
+        const w = fontWeightModel.value;
+        return w === 700 || w === '700' || w === 'bold';
+    });
+
+    const isItalicActive = computed(() => fontStyleModel.value === 'italic');
+    const isUnderlineActive = computed(() => Boolean(underlineModel.value));
+
     // alignment options for TabOption
     const alignmentOptions = ref<{ label: TextObject["alignment"] }[]>([
         { label: 'left' }, { label: 'center' }, { label: 'right' },
     ]);
+
+    function toggleBold() {
+        if (!currentFontHasBoldVariant.value) return;
+        fontWeightModel.value = isBoldActive.value ? 'normal' as any : 700 as any;
+    }
+
+    function toggleItalic() {
+        if (!currentFontHasBoldVariant.value) return;
+        fontStyleModel.value = isItalicActive.value ? 'normal' as any : 'italic' as any;
+    }
+
+    function toggleUnderline() {
+        if (!currentFontHasBoldVariant.value) return;
+        underlineModel.value = !isUnderlineActive.value as any;
+    }
 
     // ---------- SEARCH ----------
     const filteredFontOptions = computed(() => {
@@ -472,6 +533,46 @@
             margin: 0;
 
             box-sizing: border-box;
+        }
+    }
+
+    #textStyles {
+        display: flex;
+        gap: 0.4rem;
+        margin-left: auto;
+        margin-right: 1rem;
+        margin-bottom: 0.5rem;
+        margin-top: 0.5rem;
+
+        &.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+    }
+
+    .textStyleControl {
+        width: 2rem;
+        height: 2rem;
+        border-radius: 6px;
+        border: 1px solid rgb(107, 112, 120);
+        background-color: transparent;
+        color: rgb(107, 112, 120);
+        font-size: 0.9rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+
+        &.active {
+            border-color: rgb(159, 199, 86);
+            background-color: rgba(159, 199, 86, 0.12);
+            color: rgb(64, 72, 50);
+        }
+
+        &:active {
+            border: 1px solid rgb(159, 199, 86);
         }
     }
 
@@ -644,9 +745,12 @@
             display: grid;
             margin-top: 1rem;
             grid-template-columns: 48% 48%;
+            max-height: 50vh;
             row-gap: 1rem;
-
+            overflow: scroll;
+            z-index: 1;
             justify-content: space-between;
+            scrollbar-width: 0px;
 
             .option {
                 span {
@@ -673,6 +777,17 @@
             display: flex;
             flex-direction: row;
             width: 100%;
+        }
+
+        .font-search-results {
+            max-height: 30rem;
+            overflow-y: auto;
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* IE/Edge */
+        }
+
+        .font-search-results::-webkit-scrollbar {
+            display: none; /* Chrome/Safari */
         }
     }
 

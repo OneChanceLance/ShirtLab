@@ -1,6 +1,6 @@
 <template>
 
-    <button class="config-container">
+    <div class="config-container">
         <span>{{ label }}</span>
         <div class="config-details">
             <slot></slot>
@@ -10,7 +10,7 @@
                 <path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z" />
             </svg>
         </div>
-    </button>
+    </div>
 </template>
 
 <script setup lang="ts">
@@ -35,9 +35,12 @@
         justify-content: space-between;
         width: 100%;
         padding: 0.75rem 0px;
-
-
         box-sizing: border-box;
+    }
+
+    .config-container:hover {
+        background-color: rgb(248, 248, 248);
+        cursor: pointer;
     }
 
     .config-details {
@@ -62,4 +65,6 @@
         height: 1.5rem;
         fill: currentColor;
     }
+
+    ::ho
 </style>

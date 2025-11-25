@@ -1,6 +1,7 @@
 <template>
   <div class="app-shell">
     <div class="app-shell__workspace">
+      <TopStepperCool v-if="!checkoutStore.hasPressedCheckout" :modelValue="currentStep" />
       <div class="embed-wrapper">
         <div>
           <div class="embed-container">
@@ -26,6 +27,7 @@
 
 <script setup lang="ts">
   import { ref, computed, watch, watchEffect } from 'vue';
+  import TopStepperCool from './components/TopStepperCool.vue';
   import ShirtLab from './components/shirtlab/ShirtLab.vue';
   import MenuContent from './components/sideMenu/MenuContent.vue';
   import CheckoutSummaryCard from './components/checkout/CheckoutSummaryCard.vue';
@@ -81,6 +83,7 @@
 
   });
   const shirtLabRef = ref<ShirtLabExpose | null>(null);
+  const currentStep = ref<number>(0);
 
   const activeMenu = ref<string>('');
   const headerTitle = ref<string>('');
@@ -199,6 +202,8 @@
     checkoutStore.ensureMinimumQuantity();
 
     shirtLabRef.value?.updateClothing(details);
+    // advance to Design step when a product is selected
+    currentStep.value = 1;
   }
 
   function handleCenterTextFromMenu() {
@@ -216,6 +221,7 @@
   function handleSendBackFromMenu() {
     shirtLabRef.value?.sendSelectedBack();
   }
+
 
   function parseNullableNumber(value: any): number | null {
     const parsed = Number(value);
@@ -391,6 +397,12 @@
 
   syncCheckoutColor();
 
+  // Move to Checkout when checkout panel opens
+  watch(() => checkoutStore.isOpen, (open) => {
+    if (open) currentStep.value = 2;
+    else if (currentStep.value === 2) currentStep.value = 1;
+  });
+
 
 
 </script>
@@ -418,7 +430,7 @@
 
   .embed-wrapper {
     position: relative;
-    border-radius: 1rem;
+
     overflow: hidden;
   }
 

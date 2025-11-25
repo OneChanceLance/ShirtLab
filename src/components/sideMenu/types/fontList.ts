@@ -28,7 +28,35 @@ export const FONT_OPTIONS: Record<string, FontOption> = {
     'Megascope Variable': { name: 'Megascope Variable', value: '"megascope-variable", sans-serif', categories: ['sans-serif', 'variable'] },
     'Meursault Variable': { name: 'Meursault Variable', value: '"meursault-variable", serif', categories: ['serif', 'variable'] },
     'BD Orange Variable': { name: 'BD Orange Variable', value: '"bd-orange-variable", sans-serif', categories: ['sans-serif', 'variable', 'bold'] },
-    'Aquatronik Variable': { name: 'Aquatronik Variable', value: '"aquatronik-variable", sans-serif', categories: ['sans-serif', 'variable', 'tech'] }
+    'Aquatronik Variable': { name: 'Aquatronik Variable', value: '"aquatronik-variable", sans-serif', categories: ['sans-serif', 'variable', 'tech'] },
+    // More script fonts
+    'Kalufira': { name: 'Kalufira', value: '"Kalufira"', categories: ['script'] },
+    'Street Breaker': { name: 'Street Breaker', value: '"Street Breaker", cursive', categories: ['script'] },
+    'Nordminne Script': { name: 'Nordminne Script', value: '"Nordminne Script", cursive', categories: ['script'] },
+    'Birds of Paradise': { name: 'Birds of Paradise', value: '"Birds of Paradise", cursive', categories: ['script'] },
+    'Muthiara': { name: 'Muthiara', value: 'Muthiara', categories: ['script'] },
+    'Dear Script': { name: 'Dear Script', value: '"Dear Script", cursive', categories: ['script'] },
+    'Tempting': { name: 'Tempting', value: '"Tempting", cursive', categories: ['script'] },
+    'Cream Cake': { name: 'Cream Cake', value: '"Cream Cake", cursive', categories: ['script'] },
+    'Motterrdam': { name: 'Motterrdam', value: '"Motterrdam", cursive', categories: ['script'] },
+    'Floralis Couture': { name: 'Floralis Couture', value: '"Floralis Couture", cursive', categories: ['script', 'handwritten'] },
+    'Hello Valentica': { name: 'Hello Valentina', value: '"Hello Valentica", cursive', categories: ['script'] },
+    'Autography': { name: 'Autography', value: '"Autography", cursive', categories: ['script'] },
+    'Ananda': { name: 'Ananda', value: '"Ananda", cursive', categories: ['script'] },
+    'Blacksword': { name: 'Blacksword', value: '"Blacksword", cursive', categories: ['script'] },
+    'Blockt': { name: 'Blockt', value: '"Blockt"', categories: ['display', 'bold'] },
+    'Carbon': { name: 'Carbon', value: '"Carbon"', categories: ['tech', 'sans-serif'] },
+    'Block Wood': { name: 'Block Wood', value: '"Block Wood"', categories: ['display', 'stencil'] },
+    'Wet Arial': { name: 'Wet Arial', value: '"Wet Arial"', categories: ['sans-serif', 'handwritten'] },
+    'College': { name: 'College', value: '"College"', categories: ['display'] },
+    'Colleges': { name: 'Colleges', value: '"Colleges"', categories: ['display'] },
+    'Dark College': { name: 'Dark College', value: '"Dark College"', categories: ['display'] },
+    'Fine College': { name: 'Fine College', value: '"Fine College"', categories: ['display'] },
+    'Superstar': { name: 'Superstar', value: '"Superstar"', categories: ['display'] },
+    'Rats College': { name: 'Rats College', value: '"Rats College"', categories: ['display'] },
+
+
+
 };
 
 export const CATEGORY_STYLES: Record<string, Category> = {
@@ -66,7 +94,8 @@ export const CATEGORY_STYLES: Record<string, Category> = {
         name: 'Script',
         tags: ['script', 'cursive'],
         fontFamily: '"Dancing Script", cursive',
-        fontSize: '1.5rem'
+        fontSize: '1rem',
+
     },
     'handwritten': {
         name: 'Handwritten',
@@ -81,6 +110,26 @@ export const CATEGORY_STYLES: Record<string, Category> = {
         fontFamily: '"Stardos Stencil", serif',
         fontSize: '1.5rem',
         fontWeight: 700
+    },
+    'display': {
+        name: 'Display',
+        tags: ['display', 'headline', 'title'],
+        fontFamily: 'Impact, "Stardos Stencil", system-ui, sans-serif',
+        fontSize: '1.8rem',
+        fontWeight: 700
+    },
+    'monospace': {
+        name: 'Monospace',
+        tags: ['monospace', 'code'],
+        fontFamily: '"Courier New", monospace',
+        fontSize: '1.3rem'
+    },
+    'tech': {
+        name: 'Tech',
+        tags: ['tech', 'sci-fi', 'futuristic'],
+        fontFamily: '"Carbon", system-ui, sans-serif',
+        fontSize: '1.4rem',
+        fontWeight: 500
     }
 };
 

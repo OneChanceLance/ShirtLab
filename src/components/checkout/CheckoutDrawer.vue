@@ -2440,8 +2440,6 @@
     }
 
     resetPaymentFlow();
-
-    step2Complete.value = true;
     requestStatus.value = 'idle';
     submitting.value = true;
     checkoutError.value = null;
@@ -2526,6 +2524,7 @@
         throw new Error(data?.error ?? 'Unable to start payment. Please try again.');
       }
       if (data?.bypassed) {
+        step2Complete.value = true;
         currentStep.value = 3;
         requestStatus.value = 'success';
         paymentIntentClientSecret.value = null;
@@ -2538,6 +2537,7 @@
         throw new Error('Payment could not be initialised. Missing client secret.');
       }
       paymentIntentClientSecret.value = data.clientSecret as string;
+      step2Complete.value = true;
       currentStep.value = 3;
       paymentError.value = null;
       await nextTick();

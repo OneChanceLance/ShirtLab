@@ -39,9 +39,8 @@
             <button type="button" class="checkout-card__view" :disabled="cartIsEmpty" @click="handleViewCart">
               View cart
             </button>
-            <button type="button" class="checkout-card__cta" :disabled="cartIsEmpty && !hasVariant"
-              @click="handleCheckout">
-              {{ cartIsEmpty && !hasVariant ? 'Select a product' : 'Checkout' }}
+            <button type="button" class="checkout-card__cta" :disabled="cartIsEmpty" @click="handleCheckout">
+              {{ cartIsEmpty ? 'Add items to cart' : 'Checkout' }}
             </button>
           </div>
         </div>
@@ -654,6 +653,7 @@
       await updateCurrentSelectionInCart();
     }
     checkoutStore.setOpen(true);
+    checkoutStore.markCheckoutPressed();
     console.log('[CheckoutSummaryCard] Checkout drawer opened from summary card.');
   }
 
@@ -673,6 +673,7 @@
     box-shadow: 0 18px 42px rgba(14, 23, 42, 0.5);
     color: #e2e8f0;
     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    z-index: 5;
   }
 
   .checkout-card__summary {

@@ -32,6 +32,12 @@ export type TextObject = {
     type: 'text';
     content: string;
     font: string;
+    /** Optional canvas font-style, e.g. "normal" or "italic". */
+    fontStyle?: string;
+    /** Optional canvas font-weight, e.g. "normal", 400, or 700. */
+    fontWeight?: number | string;
+    /** Whether to draw an underline for this text. */
+    underline?: boolean;
     color: string;
     showHandles: boolean, // 👈 default to true
     outlineColor: string;

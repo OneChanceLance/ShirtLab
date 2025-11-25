@@ -154,3 +154,131 @@ button:focus-visible {
 .processing-overlay-fade-leave-to {
   opacity: 0;
 }
+
+@font-face {
+  font-family: "Kalufira";
+  src: url("/public/assets/fonts/Kalufira.otf");
+}
+
+@font-face {
+  font-family: "Street Breaker";
+  src: url("/public/assets/fonts/StreetBreaker.otf");
+}
+
+@font-face {
+  font-family: "Nordminne Script";
+  src: url("/public/assets/fonts/NordminneScript.otf");
+}
+
+@font-face {
+  font-family: "Birds of Paradise";
+  src: url("/public/assets/fonts/BirdsofParadise.ttf");
+}
+
+@font-face {
+  font-family: "Muthiara";
+  src: url("/public/assets/fonts/Muthiara.otf");
+}
+
+@font-face {
+  font-family: "Dear Script";
+  src: url("/public/assets/fonts/DearScript.otf");
+}
+
+@font-face {
+  font-family: "Tempting";
+  src: url("/public/assets/fonts/Tempting.otf");
+}
+
+@font-face {
+  font-family: "Cream Cake";
+  src: url("/public/assets/fonts/CreamCake.otf");
+}
+
+@font-face {
+  font-family: "Cream Cake";
+  src: url("/public/assets/fonts/CreamCakeBold.otf");
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Motterrdam";
+  src: url("/public/assets/fonts/Motterrdam.otf");
+}
+
+@font-face {
+  font-family: "Floralis Couture";
+  src: url("/public/assets/fonts/FloralisCouture.ttf");
+}
+
+@font-face {
+  font-family: "Hello Valentica";
+  src: url("/public/assets/fonts/HelloValentica.ttf");
+}
+
+@font-face {
+  font-family: "Ananda";
+  src: url("/public/assets/fonts/Ananda.ttf");
+  font-weight: normal;
+}
+
+@font-face {
+  font-family: "Ananda";
+  src: url("/public/assets/fonts/AnandaBold.ttf");
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Blacksword";
+  src: url("/public/assets/fonts/Blacksword.otf");
+}
+
+@font-face {
+  font-family: "Blockt";
+  src: url("/public/assets/fonts/Blockt.ttf");
+}
+
+@font-face {
+  font-family: "Carbon";
+  src: url("/public/assets/fonts/carbon.otf");
+}
+
+@font-face {
+  font-family: "Block Wood";
+  src: url("/public/assets/fonts/BlockWood.ttf");
+}
+
+@font-face {
+  font-family: "Wet Arial";
+  src: url("/public/assets/fonts/WetArial.otf");
+}
+
+@font-face {
+  font-family: "College";
+  src: url("/public/assets/fonts/college.ttf");
+}
+
+@font-face {
+  font-family: "Colleges";
+  src: url("/public/assets/fonts/colleges.ttf");
+}
+
+@font-face {
+  font-family: "Dark College";
+  src: url("/public/assets/fonts/DarkCollege.otf");
+}
+
+@font-face {
+  font-family: "Fine College";
+  src: url("/public/assets/fonts/FineCollege-Regular.ttf");
+}
+
+@font-face {
+  font-family: "Superstar";
+  src: url("/public/assets/fonts/Superstar.ttf");
+}
+
+@font-face {
+  font-family: "Rats College";
+  src: url("/public/assets/fonts/RatsCollege.ttf");
+}
