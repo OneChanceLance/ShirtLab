@@ -24,21 +24,23 @@
                 <span :style="currentFontPreviewStyle">
                     {{ currentFontOption.name }}
                 </span>
+
+
+                <div id="textStyles" :class="{ disabled: !currentFontHasBoldVariant }">
+                    <button type="button" class="textStyleControl" :class="{ active: isBoldActive }"
+                        :disabled="!currentFontHasBoldVariant" @click.stop="toggleBold">
+                        B
+                    </button>
+                    <button type="button" class="textStyleControl" :class="{ active: isItalicActive }"
+                        :disabled="!currentFontHasBoldVariant" @click.stop="toggleItalic">
+                        I
+                    </button>
+                    <button type="button" class="textStyleControl" :class="{ active: isUnderlineActive }"
+                        :disabled="!currentFontHasBoldVariant" @click.stop="toggleUnderline">
+                        U
+                    </button>
+                </div>
             </TextConfig>
-            <div id="textStyles" :class="{ disabled: !currentFontHasBoldVariant }">
-                <button type="button" class="textStyleControl" :class="{ active: isBoldActive }"
-                    :disabled="!currentFontHasBoldVariant" @click.stop="toggleBold">
-                    B
-                </button>
-                <button type="button" class="textStyleControl" :class="{ active: isItalicActive }"
-                    :disabled="!currentFontHasBoldVariant" @click.stop="toggleItalic">
-                    I
-                </button>
-                <button type="button" class="textStyleControl" :class="{ active: isUnderlineActive }"
-                    :disabled="!currentFontHasBoldVariant" @click.stop="toggleUnderline">
-                    U
-                </button>
-            </div>
             <hr>
             <TextConfig label="Color" @click="togglePage('color')">
                 <span :style="{ display: 'flex', alignItems: 'center', gap: '1rem' }">{{ textColor }}
@@ -782,12 +784,15 @@
         .font-search-results {
             max-height: 30rem;
             overflow-y: auto;
-            scrollbar-width: none; /* Firefox */
-            -ms-overflow-style: none; /* IE/Edge */
+            scrollbar-width: none;
+            /* Firefox */
+            -ms-overflow-style: none;
+            /* IE/Edge */
         }
 
         .font-search-results::-webkit-scrollbar {
-            display: none; /* Chrome/Safari */
+            display: none;
+            /* Chrome/Safari */
         }
     }
 

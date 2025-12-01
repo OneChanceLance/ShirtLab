@@ -7,7 +7,6 @@ export const FONT_OPTIONS: Record<string, FontOption> = {
     'Tahoma': { name: 'Tahoma', value: 'Tahoma, sans-serif', categories: ['sans-serif'] },
     'Trebuchet MS': { name: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif', categories: ['sans-serif'] },
     'Georgia': { name: 'Georgia', value: 'Georgia, serif', categories: ['serif'] },
-    'Garamond': { name: 'Garamond', value: 'Garamond, serif', categories: ['serif'] },
     'Courier New': { name: 'Courier New', value: '"Courier New", monospace', categories: ['monospace'] },
     'Lucida Console': { name: 'Lucida Console', value: '"Lucida Console", monospace', categories: ['monospace'] },
     'Monaco': { name: 'Monaco', value: 'Monaco, monospace', categories: ['monospace'] },
@@ -18,14 +17,47 @@ export const FONT_OPTIONS: Record<string, FontOption> = {
     'Impact': { name: 'Impact', value: 'Impact, sans-serif', categories: ['sans-serif', 'display'] },
     'Cerulya CF': { name: 'Cerulya CF', value: '"cerulya-cf", sans-serif', categories: ['sans-serif'] },
     'Casey Classic': { name: 'Casey Classic', value: 'Casey Classic', categories: ['display'], showcase: { weight: 500 } },
+    // System light / thin sans-serif options
+    'Helvetica Neue Light': {
+        name: 'Helvetica Neue Light',
+        value: '"Helvetica Neue", Arial, sans-serif',
+        categories: ['sans-serif', 'light'],
+        showcase: { weight: 300 }
+    },
+    'Arial Narrow': {
+        name: 'Arial Narrow',
+        value: '"Arial Narrow", Arial, sans-serif',
+        categories: ['sans-serif', 'light'],
+        showcase: { weight: 300 }
+    },
+    'Roboto Light': {
+        name: 'Roboto Light',
+        value: '"Roboto", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        categories: ['sans-serif', 'light'],
+        showcase: { weight: 300 }
+    },
+    // Google Fonts – Montserrat (thin weights)
+    // Specimen: https://fonts.google.com/specimen/Montserrat
+    // CSS: https://fonts.googleapis.com/css2?family=Montserrat:wght@100;300;400;700&display=swap
+    'Montserrat Thin': {
+        name: 'Montserrat Thin',
+        value: '"Montserrat", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        categories: ['sans-serif', 'light'],
+        showcase: { weight: 100 }
+    },
+    // Google Fonts – Work Sans (light weights)
+    // Specimen: https://fonts.google.com/specimen/Work+Sans
+    // CSS: https://fonts.googleapis.com/css2?family=Work+Sans:wght@200;300;400;600&display=swap
+    'Work Sans Light': {
+        name: 'Work Sans Light',
+        value: '"Work Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        categories: ['sans-serif', 'light'],
+        showcase: { weight: 200 }
+    },
     // Adobe fonts and other real fonts, with categories
     'Shrunken Head BB': { name: 'Shrunken Head BB', value: '"shrunken-head-bb", sans-serif', categories: ['display', 'comic'] },
     'Shrunken Head LT BB': { name: 'Shrunken Head LT BB', value: '"shrunken-head-lt-bb", sans-serif', categories: ['display', 'comic', 'light'] },
     'Amandine': { name: 'Amandine', value: 'amandine, sans-serif', categories: ['sans-serif', 'rounded'] },
-    'Dreaming Outloud Sans': { name: 'Dreaming Outloud Sans', value: '"dreaming-outloud-sans", sans-serif', categories: ['handwritten', 'sans-serif'] },
-    'Dreaming Outloud Script': { name: 'Dreaming Outloud Script', value: '"dreaming-outloud-script", cursive', categories: ['script', 'handwritten'] },
-    'Dreaming Outloud Script Slant': { name: 'Dreaming Outloud Script Slant', value: '"dreaming-outloud-scriptslant", cursive', categories: ['script', 'handwritten', 'italic'] },
-    'Megascope Variable': { name: 'Megascope Variable', value: '"megascope-variable", sans-serif', categories: ['sans-serif', 'variable'] },
     'Meursault Variable': { name: 'Meursault Variable', value: '"meursault-variable", serif', categories: ['serif', 'variable'] },
     'BD Orange Variable': { name: 'BD Orange Variable', value: '"bd-orange-variable", sans-serif', categories: ['sans-serif', 'variable', 'bold'] },
     'Aquatronik Variable': { name: 'Aquatronik Variable', value: '"aquatronik-variable", sans-serif', categories: ['sans-serif', 'variable', 'tech'] },
@@ -44,16 +76,96 @@ export const FONT_OPTIONS: Record<string, FontOption> = {
     'Autography': { name: 'Autography', value: '"Autography", cursive', categories: ['script'] },
     'Ananda': { name: 'Ananda', value: '"Ananda", cursive', categories: ['script'] },
     'Blacksword': { name: 'Blacksword', value: '"Blacksword", cursive', categories: ['script'] },
-    'Blockt': { name: 'Blockt', value: '"Blockt"', categories: ['display', 'bold'] },
+    'Blockt': {
+        name: 'Blockt',
+        value: '"Blockt"',
+        categories: ['display', 'bold'],
+        showcase: { uppercase: true }
+    },
     'Carbon': { name: 'Carbon', value: '"Carbon"', categories: ['tech', 'sans-serif'] },
-    'Block Wood': { name: 'Block Wood', value: '"Block Wood"', categories: ['display', 'stencil'] },
-    'Wet Arial': { name: 'Wet Arial', value: '"Wet Arial"', categories: ['sans-serif', 'handwritten'] },
-    'College': { name: 'College', value: '"College"', categories: ['display'] },
-    'Colleges': { name: 'Colleges', value: '"Colleges"', categories: ['display'] },
-    'Dark College': { name: 'Dark College', value: '"Dark College"', categories: ['display'] },
-    'Fine College': { name: 'Fine College', value: '"Fine College"', categories: ['display'] },
-    'Superstar': { name: 'Superstar', value: '"Superstar"', categories: ['display'] },
-    'Rats College': { name: 'Rats College', value: '"Rats College"', categories: ['display'] },
+    'Block Wood': {
+        name: 'Block Wood',
+        value: '"Block Wood"',
+        categories: ['display', 'stencil'],
+        showcase: { uppercase: true }
+    },
+    'Wet Arial': { name: 'Wet Arial', value: '"Wet Arial"', categories: ['sans-serif', 'handwritten'], showcase: { uppercase: true } },
+    'College': {
+        name: 'College',
+        value: '"College"',
+        categories: ['display'],
+        showcase: { uppercase: true }
+    },
+    'Colleges': {
+        name: 'Colleges',
+        value: '"Colleges"',
+        categories: ['display'],
+        showcase: { uppercase: true }
+    },
+    'Dark College': {
+        name: 'Dark College',
+        value: '"Dark College"',
+        categories: ['display'],
+        showcase: { uppercase: true }
+    },
+    'Fine College': {
+        name: 'Fine College',
+        value: '"Fine College"',
+        categories: ['display'],
+        showcase: { uppercase: true }
+    },
+    'Superstar': {
+        name: 'Superstar',
+        value: '"Superstar"',
+        categories: ['display'],
+        showcase: { uppercase: true }
+    },
+    'Rats College': {
+        name: 'Rats College',
+        value: '"Rats College"',
+        categories: ['display'],
+        showcase: { uppercase: true }
+    },
+    // Google Fonts – Bebas Neue (retro / display)
+    // Specimen: https://fonts.google.com/specimen/Bebas+Neue
+    // CSS: https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap
+    'Bebas Neue': {
+        name: 'Bebas Neue',
+        value: '"Bebas Neue", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        categories: ['display', 'retro'],
+        showcase: { weight: 400, uppercase: true }
+    },
+    // Google Fonts – Bungee (retro signage)
+    // Specimen: https://fonts.google.com/specimen/Bungee
+    // CSS: https://fonts.googleapis.com/css2?family=Bungee&display=swap
+    'Bungee': {
+        name: 'Bungee',
+        value: '"Bungee", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        categories: ['display', 'retro'],
+        showcase: { weight: 400, uppercase: true }
+    },
+    // Google Fonts – Press Start 2P (pixel / arcade)
+    // Specimen: https://fonts.google.com/specimen/Press+Start+2P
+    // CSS: https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap
+    'Press Start 2P': {
+        name: 'Press Start 2P',
+        value: '"Press Start 2P", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        categories: ['display', 'retro'],
+        showcase: { weight: 400, uppercase: true }
+    },
+    // Local hero / sci‑fi fonts
+    'American Captain': {
+        name: 'American Captain',
+        value: '"American Captain", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        categories: ['display', 'bold'],
+        showcase: { weight: 700, uppercase: true }
+    },
+    'Evil Empire': {
+        name: 'Evil Empire',
+        value: '"Evil Empire", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        categories: ['display', 'retro'],
+        showcase: { weight: 700, uppercase: true }
+    },
 
 
 
@@ -78,12 +190,14 @@ export const CATEGORY_STYLES: Record<string, Category> = {
         fontWeight: 'bold',
         fontSize: '1.5rem'
     },
-    'thin': {
+    'light': {
         name: 'Thin',
-        tags: ['thin', 'light', 'slim'],
-        fontWeight: 200,
-        fontSize: '1.5rem'
+        tags: ['light', 'thin'],
+        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontSize: '1.5rem',
+        fontWeight: 300
     },
+
     'retro': {
         name: 'Retro',
         tags: ['retro', 'vintage'],

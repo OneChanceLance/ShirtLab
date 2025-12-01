@@ -282,3 +282,48 @@ button:focus-visible {
   font-family: "Rats College";
   src: url("/public/assets/fonts/RatsCollege.ttf");
 }
+
+@font-face {
+  font-family: "American Captain";
+  src: url("/public/assets/fonts/American Captain.otf");
+}
+
+@font-face {
+  font-family: "Evil Empire";
+  src: url("/public/assets/fonts/Evil Empire.otf");
+}
+
+@font-face {
+  font-family: "Star Jedi";
+  src: url("/public/assets/fonts/Starjedi.ttf");
+}
+
+@font-face {
+  font-family: "Star Jedi Hollow";
+  src: url("/public/assets/fonts/Starjhol.ttf");
+}
+
+@font-face {
+  font-family: "Star Jedi Outline";
+  src: url("/public/assets/fonts/Starjout.ttf");
+}
+
+@font-face {
+  font-family: "Star Jedi Special Edition";
+  src: url("/public/assets/fonts/STJEDISE.TTF");
+}
+
+@font-face {
+  font-family: "Star Jedi Logo Doubleline 1";
+  src: url("/public/assets/fonts/Stjldbl1.ttf");
+}
+
+@font-face {
+  font-family: "Star Jedi Logo Doubleline 2";
+  src: url("/public/assets/fonts/Stjldbl2.ttf");
+}
+
+@font-face {
+  font-family: "Star Jedi Logo Mono";
+  src: url("/public/assets/fonts/Strjmono.ttf");
+}
