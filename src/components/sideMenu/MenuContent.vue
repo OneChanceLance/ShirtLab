@@ -580,7 +580,6 @@ import FontPage from "./FontPage.vue";
 import { supabase } from "../../supabase";
 import type { ImageObject, TextObject } from "../shirtlab/types";
 import {
-  COLOR_OPTIONS,
   PRODUCT_COLORS,
   selectedProductColorIndex,
   setSelectedProductColorIndex,
@@ -943,19 +942,8 @@ const selectedGroup = computed(() => {
 
 const showSwatchPanel = ref(false);
 
-function applyIconColor(opt: { name: string; color: string }) {
-  textColor.value = opt.name === "None" ? "" : opt.color;
-}
-
-function openSwatchPanel() {
-  showSwatchPanel.value = true;
-}
 function closeSwatchPanel() {
   showSwatchPanel.value = false;
-}
-function applyAndClose(c: { name: string; color: string }) {
-  applyIconColor(c);
-  closeSwatchPanel();
 }
 
 const selectedIconVariants = computed<VariantKey[]>(
@@ -1396,11 +1384,7 @@ const SHAPES: ShapeItem[] = [
 
 // ---- ICON COLOR STATE + HELPERS ----
 // shows "None" or the color's friendly name
-const currentSwatchName = computed(() => {
-  if (!textColor.value) return "None";
-  const all = Object.values(COLOR_OPTIONS);
-  return all.find((c) => c.color === textColor.value)?.name || textColor.value;
-});
+
 const textColor = ref<string>(""); // '' = no override (use icon's default)
 
 function buildIconApiUrl(
