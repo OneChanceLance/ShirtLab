@@ -135,9 +135,21 @@
   function buildDesignPreviewPayload(options?: BuildPreviewOptions): CartItemDesignPreviews {
     const includeFallback = options?.includeFallback ?? true;
     const previews = designPreviews.value;
+    const colorValue = color.value;
+
+    const front = previews?.Front ?? (includeFallback ? previewImage.value ?? null : null);
+    const back =
+      previews?.Back ??
+      (includeFallback
+        ? (colorValue?.backUrl ||
+            colorValue?.frontUrl ||
+            colorValue?.sideUrl ||
+            null)
+        : null);
+
     return {
-      Front: previews?.Front ?? (includeFallback ? previewImage.value ?? null : null),
-      Back: previews?.Back ?? null,
+      Front: front,
+      Back: back,
     };
   }
 

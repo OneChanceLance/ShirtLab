@@ -2269,6 +2269,35 @@ function loadViewState(view: View) {
   draw();
 }
 
+async function ensureShirtBackgroundForView(view: View) {
+  const desiredSrc = viewToSrc[view] || viewToSrc.Front || "";
+
+  // If there's no src, nothing to do
+  if (!desiredSrc) return;
+
+  // If it's already that src, don't thrash the image
+  if (shirtBg.src === desiredSrc && shirtBgLoaded.value) return;
+
+  return new Promise<void>((resolve) => {
+    shirtBgLoaded.value = false;
+    shirtBgError.value = null;
+    shirtBgMirrored.value = viewMirrored[view];
+
+    shirtBg.onload = () => {
+      shirtBgLoaded.value = true;
+      shirtBgError.value = null;
+      resolve();
+    };
+    shirtBg.onerror = () => {
+      shirtBgLoaded.value = false;
+      shirtBgError.value = `Failed to load shirt image: ${desiredSrc}`;
+      resolve(); // still resolve so previews continue (will just be blank/filled)
+    };
+
+    shirtBg.src = desiredSrc;
+  });
+}
+
 async function updatePreviewFor(view: View, { skipBackground = false } = {}) {
   const startTime =
     typeof performance !== "undefined" && typeof performance.now === "function"
@@ -2277,6 +2306,10 @@ async function updatePreviewFor(view: View, { skipBackground = false } = {}) {
   let exitTag: "success-main" | "success-fallback" | "error" | "unknown" =
     "unknown";
   console.log("[ShirtPlacer] updatePreviewFor:start", { view, skipBackground });
+
+  if (!skipBackground) {
+    await ensureShirtBackgroundForView(view);
+  }
   const originalView = selectedView.value as View;
   let switchedView = false;
 
@@ -2986,14 +3019,10 @@ async function generateHighResCheckoutPreviews() {
   const previous = generateHighResPreviews.value;
   generateHighResPreviews.value = true;
   try {
-    previewDebug("Front", "high-res checkout generation requested", {
-      skipBackground: !shirtBgLoaded.value,
-    });
-    await updatePreviewFor("Front", { skipBackground: !shirtBgLoaded.value });
-    previewDebug("Back", "high-res checkout generation requested", {
-      skipBackground: !shirtBgLoaded.value,
-    });
-    await updatePreviewFor("Back", { skipBackground: !shirtBgLoaded.value });
+    // Don't try to be clever with skipBackground here;
+    // we *want* background for both snapshots.
+    await updatePreviewFor("Front", { skipBackground: false });
+    await updatePreviewFor("Back", { skipBackground: false });
     console.info(
       "[ShirtPlacer] High-res checkout previews refreshed for both views."
     );
@@ -4505,10 +4534,7 @@ function uploadObject(type: "image" | "text", payload: any) {
       images.push(newImage);
 
       // Auto-select newly created shapes and icons so their controls appear immediately
-      if (
-        newImage.elementType === "shape" ||
-        newImage.elementType === "icon"
-      ) {
+      if (newImage.elementType === "shape" || newImage.elementType === "icon") {
         selectedObject.value = newImage;
       }
 
