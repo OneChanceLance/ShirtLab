@@ -262,46 +262,6 @@
                     class="shape-color-input"
                   />
                 </div>
-                <div
-                  v-if="currentVariant === 'outline'"
-                  class="controls__field"
-                >
-                  <label class="controls__label">Stroke</label>
-                  <input
-                    type="color"
-                    v-model="shapeStroke"
-                    class="shape-color-input"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div class="shape-grid__stroke">
-              <div class="controls__field controls__field--wide">
-                <label class="controls__label">Stroke width</label>
-                <WeightSlider
-                  v-model="shapeStrokeWidth"
-                  :min="1"
-                  :max="10"
-                  :step="1"
-                />
-              </div>
-            </div>
-            <div class="shape-grid__detail" v-if="selectedShapeType === 'rect'">
-              <div class="controls__field">
-                <label class="controls__label">Corner radius</label>
-                <div class="shape-slider-row">
-                  <input
-                    type="range"
-                    min="0"
-                    max="40"
-                    step="1"
-                    v-model.number="shapeCornerRadius"
-                  />
-                  <span class="shape-slider-value"
-                    >{{ shapeCornerRadius }}px</span
-                  >
-                </div>
               </div>
             </div>
           </div>
@@ -403,7 +363,10 @@
 
             <div class="shape-grid__colors">
               <div class="shape-color-pair">
-                <div class="controls__field">
+                <div
+                  class="controls__field"
+                  v-if="selectedShapeStyle === 'filled'"
+                >
                   <label class="controls__label">Fill</label>
                   <input
                     type="color"
@@ -1730,6 +1693,8 @@ function svgFromShapeMeta(m: ShapeMeta): string {
     useUnitViewBox,
     baseWidth: W,
     baseHeight: H,
+    // Pad by at least 10px, but increase with stroke width
+    paddingPx: Math.max(10, m.strokeWidth || 0),
   });
 }
 
@@ -1739,6 +1704,8 @@ function trimSvgWhitespace(
     useUnitViewBox?: boolean;
     baseWidth?: number;
     baseHeight?: number;
+    /** Optional extra padding (in final pixels) around the tight crop */
+    paddingPx?: number;
   }
 ): string {
   if (
@@ -1829,19 +1796,6 @@ function trimSvgWhitespace(
       return svgMarkup;
     }
 
-    const left = Math.floor(minX);
-    const top = Math.floor(minY);
-    const right = Math.ceil(maxX);
-    const bottom = Math.ceil(maxY);
-    const widthUnits = Math.max(1, right - left);
-    const heightUnits = Math.max(1, bottom - top);
-
-    svgEl.setAttribute(
-      "viewBox",
-      `${left} ${top} ${widthUnits} ${heightUnits}`
-    );
-    svgEl.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-
     const useUnitViewBox = options?.useUnitViewBox ?? false;
 
     const hasBaseWidth =
@@ -1853,12 +1807,44 @@ function trimSvgWhitespace(
       typeof options.baseHeight === "number" &&
       Number.isFinite(options.baseHeight);
 
+    let left = Math.floor(minX);
+    let top = Math.floor(minY);
+    let right = Math.ceil(maxX);
+    let bottom = Math.ceil(maxY);
+    let widthUnits = Math.max(1, right - left);
+    let heightUnits = Math.max(1, bottom - top);
+
     const targetWidth = hasBaseWidth
       ? (options!.baseWidth as number)
       : originalWidth ?? originalViewBoxWidth ?? widthUnits;
     const targetHeight = hasBaseHeight
       ? (options!.baseHeight as number)
       : originalHeight ?? originalViewBoxHeight ?? heightUnits;
+
+    const paddingPx = options?.paddingPx ?? 0;
+    if (paddingPx > 0 && targetWidth > 2 * paddingPx && targetHeight > 2 * paddingPx) {
+      const widthUnits0 = widthUnits;
+      const heightUnits0 = heightUnits;
+
+      const padUnitsX =
+        (widthUnits0 * paddingPx) / (targetWidth - 2 * paddingPx);
+      const padUnitsY =
+        (heightUnits0 * paddingPx) / (targetHeight - 2 * paddingPx);
+
+      left -= padUnitsX;
+      right += padUnitsX;
+      top -= padUnitsY;
+      bottom += padUnitsY;
+
+      widthUnits = Math.max(1, right - left);
+      heightUnits = Math.max(1, bottom - top);
+    }
+
+    svgEl.setAttribute(
+      "viewBox",
+      `${left} ${top} ${widthUnits} ${heightUnits}`
+    );
+    svgEl.setAttribute("xmlns", "http://www.w3.org/2000/svg");
 
     const widthScale = useUnitViewBox
       ? targetWidth / 100
@@ -2237,6 +2223,14 @@ function applyToSelectedShapeImage() {
   const so = selectedObject.value as any;
   if (!isShapeImageSelected.value || !so) return;
 
+  // Preserve current geometry so the shape stays in the exact same
+  // spot/size on the canvas even if the underlying SVG crop/padding changes.
+  const prevX = so.x;
+  const prevY = so.y;
+  const prevW = so.w;
+  const prevH = so.h;
+  const prevRotation = so.rotation;
+
   const baseKey =
     typeof so.elementVariant === "string" && so.elementVariant.length
       ? so.elementVariant
@@ -2274,14 +2268,23 @@ function applyToSelectedShapeImage() {
   so.imgUrl = url;
   so.isVector = true;
 
+  const handleLoad = () => {
+    if (typeof prevX === "number") so.x = prevX;
+    if (typeof prevY === "number") so.y = prevY;
+    if (typeof prevW === "number") so.w = prevW;
+    if (typeof prevH === "number") so.h = prevH;
+    if (typeof prevRotation === "number") so.rotation = prevRotation;
+    props.draw();
+  };
+
   if (so.img && typeof so.img === "object") {
-    so.img.onload = () => props.draw();
+    so.img.onload = handleLoad;
     so.img.crossOrigin = "anonymous";
     so.img.src = url;
   } else {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => props.draw();
+    img.onload = handleLoad;
     img.src = url;
     so.img = img;
   }
