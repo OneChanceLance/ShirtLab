@@ -435,6 +435,7 @@
       designPreviews: previews,
       clothingDefinition: checkoutStore.clothingDefinition ?? null,
       quantity: checkoutStore.quantity,
+      designMetrics: checkoutStore.designMetrics,
       logger: log ? pricingLogger : undefined,
     });
   }
@@ -574,6 +575,7 @@
       designPreviews: previewBundle.design,
       clothingDefinition: checkoutStore.clothingDefinition ?? null,
       quantity: checkoutStore.quantity,
+      designMetrics: checkoutStore.designMetrics,
     });
 
     const payload: AddCartItemPayload = {

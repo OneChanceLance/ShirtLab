@@ -1054,6 +1054,10 @@ const cartPricingDetails = computed(() => {
       designPreviews: item.designPreviews ?? { Front: null, Back: null },
       clothingDefinition: item.clothingDefinition ?? null,
       quantity: item.quantity,
+      // Cart items were created from the same live sizing UI metrics,
+      // but they currently don't persist per-view measurements. For now
+      // we rely on the serialized design state; designMetrics is only
+      // used for the live, in-editor preview.
     });
     const currency = item.currency ?? fallbackCurrency;
     return {

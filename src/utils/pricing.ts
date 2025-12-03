@@ -55,12 +55,18 @@ export interface PricingBreakdown {
   pixelsPerInch: number;
 }
 
+type DesignViewMetrics = {
+  areaSquareInches: number | null;
+  coverageRatio: number | null;
+};
+
 export interface PricingInput {
   basePrice: number | null | undefined;
   designState: SerializedDesignState | null | undefined;
   designPreviews: CartItemDesignPreviews | null | undefined;
   clothingDefinition: Record<string, any> | null | undefined;
   quantity: number;
+  designMetrics?: Partial<Record<DesignViewName, DesignViewMetrics | null>>;
   logger?: (message: string, details?: Record<string, unknown>) => void;
 }
 
@@ -69,7 +75,11 @@ const DESIGN_LARGE_PRICE = 15;
 const DESIGN_SMALL_PRICE = 10;
 const SECOND_SIDE_DISCOUNT = 1;
 const DEFAULT_PIXELS_PER_INCH = 40;
-const FULL_GRID_RATIO_THRESHOLD = 0.7;
+// Fraction of the printable grid area used to decide
+// when a design is treated as "full"/large.
+// This is intentionally modest so that designs that
+// feel visually big on smaller grids are priced as large.
+const FULL_GRID_RATIO_THRESHOLD = 0.3;
 
 const FALLBACK_GRID_INCHES: Record<string, number> = {
   width: 12,
@@ -239,6 +249,7 @@ function classifyDesignCategory(
   previews: CartItemDesignPreviews | null | undefined,
   grid: Record<string, any> | null | undefined,
   fallbackPpi: number,
+  metricsForView: DesignViewMetrics | null | undefined,
   logger?: PricingInput['logger'],
 ): DesignChargeDetail[] {
   const gridWidthPx = toNumber((grid as any)?.w ?? (grid as any)?.widthPx ?? (grid as any)?.width);
@@ -299,6 +310,7 @@ function classifyDesignCategory(
     return boundsPx / DEFAULT_PIXELS_PER_INCH;
   };
 
+  // Single absolute area value kept for logging/debug if needed.
   const areaThresholdSqInches = DESIGN_PRICE_THRESHOLD_INCHES * DESIGN_PRICE_THRESHOLD_INCHES;
 
   let minX = Number.POSITIVE_INFINITY;
@@ -360,7 +372,7 @@ function classifyDesignCategory(
 
   const boundingWidthInches = computeDimension(boundingWidthPx, gridWidthPx, gridWidthInches, gridPpi);
   const boundingHeightInches = computeDimension(boundingHeightPx, gridHeightPx, gridHeightInches, gridPpi);
-  const boundingAreaInches = boundingWidthInches * boundingHeightInches;
+  let boundingAreaInches = boundingWidthInches * boundingHeightInches;
 
   if (!Number.isFinite(boundingAreaInches) || boundingAreaInches <= 0) {
     logger?.(`Combined bounds for ${viewName} produced no measurable area; applying minimum charge.`);
@@ -377,13 +389,28 @@ function classifyDesignCategory(
 
   const widthRatio = gridWidthPx && gridWidthPx > 0 ? boundingWidthPx / gridWidthPx : null;
   const heightRatio = gridHeightPx && gridHeightPx > 0 ? boundingHeightPx / gridHeightPx : null;
-  const areaCoverageRatio = gridAreaInches && gridAreaInches > 0
+  let areaCoverageRatio = gridAreaInches && gridAreaInches > 0
     ? Math.min(1, boundingAreaInches / gridAreaInches)
     : null;
 
+  // If the live sizing UI has already computed area and coverage for this view,
+  // prefer those exact numbers so pricing stays in lockstep with the on-canvas
+  // measurement display.
+  if (metricsForView) {
+    if (typeof metricsForView.areaSquareInches === 'number' && metricsForView.areaSquareInches > 0) {
+      boundingAreaInches = metricsForView.areaSquareInches;
+    }
+    if (typeof metricsForView.coverageRatio === 'number' && metricsForView.coverageRatio > 0) {
+      areaCoverageRatio = Math.min(1, metricsForView.coverageRatio);
+    }
+  }
+
+  // Large vs small is determined solely by the design area reported
+  // in the sizing UI: any design with more than 64 sq in is "large".
   const isLarge =
-    boundingAreaInches >= areaThresholdSqInches ||
-    (typeof areaCoverageRatio === 'number' && areaCoverageRatio >= FULL_GRID_RATIO_THRESHOLD);
+    typeof boundingAreaInches === 'number' &&
+    Number.isFinite(boundingAreaInches) &&
+    boundingAreaInches > areaThresholdSqInches;
 
   const base = isLarge ? DESIGN_LARGE_PRICE : DESIGN_SMALL_PRICE;
   const coverageForDetail = typeof areaCoverageRatio === 'number'
@@ -459,7 +486,19 @@ export function calculatePricing(input: PricingInput): PricingBreakdown {
 
   const designCharges: DesignChargeDetail[] = [];
   (['Front', 'Back'] as DesignViewName[]).forEach((viewName, index) => {
-    const details = classifyDesignCategory(viewName, designState ?? null, designPreviews, grid, ppi, logger);
+    const metricsForView =
+      input.designMetrics && Object.prototype.hasOwnProperty.call(input.designMetrics, viewName)
+        ? input.designMetrics[viewName] ?? null
+        : null;
+    const details = classifyDesignCategory(
+      viewName,
+      designState ?? null,
+      designPreviews,
+      grid,
+      ppi,
+      metricsForView,
+      logger,
+    );
     if (!details.length) return;
     const multiplier = index === 1 ? SECOND_SIDE_DISCOUNT : 1;
     details.forEach((detail) => {

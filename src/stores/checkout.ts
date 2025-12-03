@@ -81,6 +81,10 @@ export const useCheckoutStore = defineStore('checkout', {
       Front: null,
       Back: null,
     } as Record<DesignView, string | null>,
+    designMetrics: {
+      Front: null,
+      Back: null,
+    } as Record<DesignView, { areaSquareInches: number | null; coverageRatio: number | null } | null>,
     activeDesignView: 'Front' as DesignView,
     customer: {
       fullName: '',
@@ -221,6 +225,20 @@ export const useCheckoutStore = defineStore('checkout', {
       this.blankDesignPreviews.Back = null;
       this.blankDesignCacheRefs.Front = null;
       this.blankDesignCacheRefs.Back = null;
+    },
+    setDesignMetrics(view: DesignView, metrics: { areaSquareInches: number | null; coverageRatio: number | null } | null) {
+      this.designMetrics[view] = metrics
+        ? {
+            areaSquareInches:
+              typeof metrics.areaSquareInches === 'number'
+                ? metrics.areaSquareInches
+                : null,
+            coverageRatio:
+              typeof metrics.coverageRatio === 'number'
+                ? metrics.coverageRatio
+                : null,
+          }
+        : null;
     },
     setCanvasPreview(view: DesignView, preview: string | null) {
       this.canvasPreviews[view] = typeof preview === 'string' && preview.trim() ? preview : null;
