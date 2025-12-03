@@ -1097,11 +1097,6 @@ function switchView(next: View, options: { skipStore?: boolean } = {}) {
   }
   if (!skipStore) {
     storeViewState(previous);
-    void updatePreviewFor(previous, {
-      skipBackground: !shirtBgLoaded.value,
-    }).catch((error) => {
-      console.warn("[ShirtPlacer] Failed to refresh preview", error);
-    });
   }
 
   selectedView.value = next;
@@ -1521,14 +1516,29 @@ function cleanupPreviewCaches(view: View) {
 }
 
 function hasDesignForView(view: View): boolean {
+  // 1) Live canvas contents for the active view
   if (view === selectedView.value) {
     if (images.length > 0 || texts.length > 0) {
       return true;
     }
   }
+
+  // 2) Snapshot stored in local view state
   const state = viewStates[view];
-  if (!state) return false;
-  return (state.images?.length ?? 0) > 0 || (state.texts?.length ?? 0) > 0;
+  if (state && ((state.images?.length ?? 0) > 0 || (state.texts?.length ?? 0) > 0)) {
+    return true;
+  }
+
+  // 3) Serialized design state in the checkout store (e.g. when re‑hydrating)
+  const designState = checkoutStore.designState;
+  const viewState = designState?.views?.[view];
+  if (viewState) {
+    const hasImages = Array.isArray(viewState.images) && viewState.images.length > 0;
+    const hasTexts = Array.isArray(viewState.texts) && viewState.texts.length > 0;
+    if (hasImages || hasTexts) return true;
+  }
+
+  return false;
 }
 
 function refreshCheckoutDesignPreview(view: View, reason: string) {
@@ -1537,17 +1547,22 @@ function refreshCheckoutDesignPreview(view: View, reason: string) {
   const display = normalizePreview(channel.displayRef.value);
   const hasDesign = hasDesignForView(view);
   if (!hasDesign) {
-    previewDebug(view, "no active design detected; clearing preview state", {
-      reason,
-    });
+    previewDebug(
+      view,
+      "no active design detected; reverting to garment-only preview",
+      {
+        reason,
+      }
+    );
     channel.hiResRef.value = "";
-    channel.displayRef.value = "";
     channel.blankRef.value = "";
     channel.canvasRef.value = "";
     checkoutStore.setDesignPreview(view, null);
     checkoutStore.setBlankDesignPreview(view, null);
     checkoutStore.setCanvasPreview(view, null);
     cleanupPreviewCaches(view);
+    const garmentSrc = viewToSrc[view] || viewToSrc.Front || fallbackPreview;
+    channel.displayRef.value = garmentSrc;
     return;
   }
   // Prefer the WITH-shirt composite for the main design preview (used by uploads),
