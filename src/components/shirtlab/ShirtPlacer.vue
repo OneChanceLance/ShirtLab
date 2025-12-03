@@ -346,7 +346,6 @@ const coverageBounds = ref<{
   w: number;
   h: number;
 } | null>(null);
-const inspectorVisible = ref(false);
 const alignmentGuides = ref<{ vertical: boolean; horizontal: boolean }>({
   vertical: false,
   horizontal: false,
@@ -432,8 +431,6 @@ const inspectorState = reactive<Record<View, InspectorSnapshot>>({
   Front: { items: [], summary: createEmptySummary("Front") },
   Back: { items: [], summary: createEmptySummary("Back") },
 });
-
-const activeInspector = computed(() => inspectorState[selectedView.value]);
 
 // at top-level (script setup)
 let onWinMove: ((e: MouseEvent) => void) | null = null;

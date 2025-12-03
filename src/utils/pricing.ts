@@ -75,11 +75,6 @@ const DESIGN_LARGE_PRICE = 15;
 const DESIGN_SMALL_PRICE = 10;
 const SECOND_SIDE_DISCOUNT = 1;
 const DEFAULT_PIXELS_PER_INCH = 40;
-// Fraction of the printable grid area used to decide
-// when a design is treated as "full"/large.
-// This is intentionally modest so that designs that
-// feel visually big on smaller grids are priced as large.
-const FULL_GRID_RATIO_THRESHOLD = 0.3;
 
 const FALLBACK_GRID_INCHES: Record<string, number> = {
   width: 12,
