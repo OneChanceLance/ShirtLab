@@ -73,7 +73,7 @@ export interface PricingInput {
 const DESIGN_PRICE_THRESHOLD_INCHES = 8;
 const DESIGN_LARGE_PRICE = 15;
 const DESIGN_SMALL_PRICE = 10;
-const SECOND_SIDE_DISCOUNT = 1;
+const SECOND_SIDE_DISCOUNT = 0.5;
 const DEFAULT_PIXELS_PER_INCH = 40;
 
 const FALLBACK_GRID_INCHES: Record<string, number> = {
@@ -241,7 +241,7 @@ function extractDesignElements(view: SerializedDesignState['views'][DesignViewNa
 function classifyDesignCategory(
   viewName: DesignViewName,
   designState: SerializedDesignState | null | undefined,
-  previews: CartItemDesignPreviews | null | undefined,
+  _previews: CartItemDesignPreviews | null | undefined,
   grid: Record<string, any> | null | undefined,
   fallbackPpi: number,
   metricsForView: DesignViewMetrics | null | undefined,
@@ -268,24 +268,10 @@ function classifyDesignCategory(
     : null;
 
   const elements = extractDesignElements(designState?.views?.[viewName]);
-  const trimmedPreview = previews?.[viewName];
-  const hasPreview = typeof trimmedPreview === 'string' && trimmedPreview.trim().length > 0;
   const charges: DesignChargeDetail[] = [];
 
   if (!elements.length) {
-    if (!hasPreview) {
-      logger?.(`❌ No ${viewName} design detected.`);
-      return charges;
-    }
-    logger?.(`Detected ${viewName} preview without bounds; treating as small-area charge.`, { view: viewName });
-    charges.push({
-      view: viewName,
-      category: 'left',
-      basePrice: DESIGN_SMALL_PRICE,
-      multiplier: 1,
-      charge: DESIGN_SMALL_PRICE,
-      source: 'preview',
-    });
+    logger?.(`❌ No ${viewName} design detected.`);
     return charges;
   }
 
@@ -480,7 +466,13 @@ export function calculatePricing(input: PricingInput): PricingBreakdown {
   const grid = clothingDefinition?.grid ?? null;
 
   const designCharges: DesignChargeDetail[] = [];
-  (['Front', 'Back'] as DesignViewName[]).forEach((viewName, index) => {
+  const viewNames: DesignViewName[] = ['Front', 'Back'];
+  const perViewDetails: Record<DesignViewName, DesignChargeDetail[]> = {
+    Front: [],
+    Back: [],
+  };
+
+  viewNames.forEach((viewName) => {
     const metricsForView =
       input.designMetrics && Object.prototype.hasOwnProperty.call(input.designMetrics, viewName)
         ? input.designMetrics[viewName] ?? null
@@ -495,7 +487,20 @@ export function calculatePricing(input: PricingInput): PricingBreakdown {
       logger,
     );
     if (!details.length) return;
-    const multiplier = index === 1 ? SECOND_SIDE_DISCOUNT : 1;
+    perViewDetails[viewName] = details;
+  });
+
+  const frontDetails = perViewDetails.Front;
+  const backDetails = perViewDetails.Back;
+  const hasFrontDesign = frontDetails.length > 0;
+  const hasBackDesign = backDetails.length > 0;
+
+  const applyChargesForView = (
+    viewName: DesignViewName,
+    details: DesignChargeDetail[],
+    multiplier: number,
+    label: 'primary' | 'secondary',
+  ) => {
     details.forEach((detail) => {
       const charge = roundCurrency(detail.basePrice * multiplier);
       designCharges.push({
@@ -503,7 +508,7 @@ export function calculatePricing(input: PricingInput): PricingBreakdown {
         multiplier,
         charge,
       });
-      logger?.(`✅ Applied ${index === 0 ? 'primary' : 'secondary'} ${detail.category} design charge`, {
+      logger?.(`✅ Applied ${label} ${detail.category} design charge`, {
         view: viewName,
         elementIndex: detail.elementIndex,
         elementType: detail.elementType,
@@ -512,7 +517,19 @@ export function calculatePricing(input: PricingInput): PricingBreakdown {
         charge,
       });
     });
-  });
+  };
+
+  if (hasFrontDesign && hasBackDesign) {
+    applyChargesForView('Front', frontDetails, 1, 'primary');
+    applyChargesForView('Back', backDetails, SECOND_SIDE_DISCOUNT, 'secondary');
+  } else {
+    if (hasFrontDesign) {
+      applyChargesForView('Front', frontDetails, 1, 'primary');
+    }
+    if (hasBackDesign) {
+      applyChargesForView('Back', backDetails, 1, 'primary');
+    }
+  }
 
   const designChargeTotal = designCharges.reduce((total, detail) => total + detail.charge, 0);
   logger?.('Total design charge', { totalCharge: designChargeTotal });
